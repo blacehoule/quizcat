@@ -22,8 +22,9 @@ When iterating on the TUI, prefer `textual run --dev main.py` so the dev console
 
 The Textual app is a thin three-layer composition:
 
-- `QuizCat` (App) in `main.py` — owns the title/subtitle, the `d` dark-mode binding, and pushes `QuizScreen` on ready. CSS is loaded from `quizcat.tcss`.
-- `QuizScreen` (Screen) — vertical stack of: `TimerBar`, `ProgressMeter`, one content panel (`QAPanel`, `PausedPanel`, or `SummaryPanel`), and `ControlPanel`. It owns the 15-minute timer, pause/resume state, timer display mode, answered-question count, end state, and which content panel is visible.
+- `QuizCat` (App) in `main.py` — owns the title/subtitle, the `d` dark-mode binding, and pushes `DashboardScreen` on ready. CSS is loaded from `quizcat.tcss`.
+- `DashboardScreen` (Screen) — lets the user choose from 8 placeholder sample exams and start a quiz. It pushes `QuizScreen` with the selected exam label.
+- `QuizScreen` (Screen) — vertical stack of: `TimerBar`, `ProgressMeter`, one content panel (`QAPanel`, `PausedPanel`, or `SummaryPanel`), and `ControlPanel`. It owns the 15-minute timer, pause/resume state, timer display mode, answered-question count, end state, selected exam label, and which content panel is visible.
 - `QAPanel` / `PausedPanel` / `SummaryPanel` / `ControlPanel` — `QAPanel` renders the question as `Markdown` in a scrollable pane on the left and choices as a `ListView` on the right. `PausedPanel` replaces it while paused. `SummaryPanel` replaces it when time expires or all 50 questions are submitted. `ControlPanel` holds `Pause` / `Resume` / `Abort` / timer mode `Switch` / `Submit` controls; `Resume` is hidden via CSS (`display: none`) and swaps in for `Pause` when the quiz is paused.
 
 Current quiz behavior:
@@ -31,7 +32,7 @@ Current quiz behavior:
 - Each `Submit` press advances the question progress meter by one of 50 questions, i.e. 2%.
 - Pause freezes the timer, swaps `Pause` for `Resume`, hides the question and answers behind the pause screen, and disables Submit.
 - The quiz ends when time expires or when the 50th question is submitted. The summary card uses placeholder scoring until real answer validation exists.
-- Abort quits the app.
+- Abort returns to the dashboard. After a quiz ends, the control panel hides the other controls and shows a dashboard-return button.
 - The layout still uses `EXAMPLE_QUESTION`; real answer validation is not implemented yet.
 
 `stopwatch_tutorial.py` / `stopwatch.tcss` are an unmodified copy of the upstream Textual stopwatch tutorial, kept as a reference for timer patterns (reactive attributes, `set_interval`, start/stop/reset). Do not import from it — copy patterns as needed. `assets.py` holds ASCII banners (`banner`, `preamble`, `wink_eye_cat`, `open_eye_cat`) for menu/end screens that don't exist yet.

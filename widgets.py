@@ -267,12 +267,14 @@ class ControlPanel(Horizontal):
       enters the paused state, CSS will flip Pause hidden and Resume
       visible so the same panel slot toggles labels in place without the
       neighbouring buttons jumping around.
-    * **Abort**  — quit the app.
+    * **Abort**  — leave the current quiz and return to the dashboard.
     * **Elapsed switch** — toggles the timer readout between remaining time
       and elapsed time. The progress bar always tracks elapsed time.
     * **Submit** — count the current example question as answered. Real
       answer validation will replace that placeholder behaviour once the
       CSV bank is wired in.
+    * **Dashboard** — mounted hidden until the quiz ends, then replaces
+      Submit as the only visible action.
 
     The DOM order is left → right, but Submit is docked to the right edge
     of the panel in the stylesheet (``dock: right``). That keeps Submit
@@ -296,3 +298,4 @@ class ControlPanel(Horizontal):
         # Submit is the primary action of the screen, so it gets the
         # high-contrast `success` variant and floats to the trailing edge.
         yield Button("Submit", id="submit", variant="success")
+        yield Button("Dashboard", id="return-dashboard", variant="primary")

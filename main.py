@@ -4,7 +4,7 @@ Module map
 ----------
 ``main.py``      App subclass and entry point (this file). Owns global
                  concerns only: title, theme, root key bindings, initial
-                 screen.
+                 dashboard screen.
 ``screens.py``   ``Screen`` subclasses. A screen is one "page" of the app
                  and is responsible for high-level state.
 ``widgets.py``   Reusable composable widgets (Q/A panel, control bar, the
@@ -19,7 +19,7 @@ Run from a uv-managed checkout with::
 
 from textual.app import App
 
-from screens import QuizScreen
+from screens import DashboardScreen
 
 
 class QuizCat(App):
@@ -28,7 +28,7 @@ class QuizCat(App):
     Stays intentionally small: anything that isn't global lives on the
     screen instead. As new screens are added (start menu, post-quiz
     results, pause overlay) they just become additional ``push_screen``
-    calls — no churn here.
+    calls from screen-owned navigation actions — no churn here.
     """
 
     TITLE = "QuizCat"
@@ -44,14 +44,14 @@ class QuizCat(App):
     ]
 
     def on_ready(self) -> None:
-        """Push the quiz screen once the app's first layout pass is done.
+        """Push the dashboard once the app's first layout pass is done.
 
         Using ``on_ready`` rather than ``on_mount`` ensures the main window
-        is fully sized before we mount the quiz screen — that avoids a
+        is fully sized before we mount the dashboard screen — that avoids a
         one-frame flicker where the unframed default screen briefly shows
         through.
         """
-        self.push_screen(QuizScreen())
+        self.push_screen(DashboardScreen())
 
     def action_toggle_dark(self) -> None:
         """Flip between Textual's bundled light and dark themes.
