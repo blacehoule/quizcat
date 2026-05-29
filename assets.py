@@ -44,26 +44,3 @@ to answer 40 questions. Select 'Begin' to start
 """
 
 
-q_card = f"""
-
-{{0}}
-
-{{1}}
-"""
-
-print(q_card.format("Hello,", "World!"))
-
-import pandas as pd
-
-def build_test():
-        questions = pd.read_csv("questions_clean.csv", index_col=0)
-        eqrfa
-
-import pandas as pd
-questions = pd.read_csv("questions_clean.csv", index_col=0)
-print(questions.head())
-
-questions.groupby('subcategory').sample()
-
-def help():
-        

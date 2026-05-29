@@ -1,0 +1,40 @@
+ControlPanel {
+    height: 5;
+    width: 1fr;
+    border: tall $background;
+    dock: bottom;
+}
+
+QAPanel {
+    width: 1fr;
+}
+
+Button {
+    width: 16;
+    height: 3;
+    margin-left: 1;
+    margin-right: 1;
+}
+
+#submit {
+    dock: right;
+}
+
+#Q {
+    dock: left;
+    width: 0.6fr;
+}
+
+#A {
+    dock: right;
+}
+
+ListView {
+    margin: 2 2;
+    width: 30;
+}
+
+Label {
+    padding: 1 2;
+}
+

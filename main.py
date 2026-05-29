@@ -1,101 +1,50 @@
-from time import monotonic
-
 from textual.app import App, ComposeResult
-from textual.containers import HorizontalGroup, VerticalScroll
-from textual.reactive import reactive
-from textual.widgets import Button, Digits, Footer, Header
+from textual.widgets import Header, Footer, Placeholder, Markdown, ListView, ListItem, Label, ProgressBar, Button, Switch
+from textual.containers import Horizontal, Vertical, Center, HorizontalGroup
+from textual.screen import Screen
+from textual.timer import Timer
 
+from example_question import EXAMPLE_QUESTION, EXAMPLE_ANSWERS
+choices = list([f"{k}. {v}" for k, v in EXAMPLE_ANSWERS.items()])
+# choices = list([ListItem(Label(f"{k}. {v}")) for k, v in EXAMPLE_ANSWERS.items()])
+# print(choices)
 
-class TimeDisplay(Digits):
-    """A widget to display elapsed time."""
-
-    start_time = reactive(monotonic)
-    time = reactive(0.0)
-    total = reactive(0.0)
-
-    def on_mount(self) -> None:
-        """Event handler called when widget is added to the app."""
-        self.update_timer = self.set_interval(1 / 60, self.update_time, pause=True)
-
-    def update_time(self) -> None:
-        """Method to update time to current."""
-        self.time = self.total + (monotonic() - self.start_time)
-
-    def watch_time(self, time: float) -> None:
-        """Called when the time attribute changes."""
-        minutes, seconds = divmod(time, 60)
-        hours, minutes = divmod(minutes, 60)
-        self.update(f"{hours:02,.0f}:{minutes:02.0f}:{seconds:05.2f}")
-
-    def start(self) -> None:
-        """Method to start (or resume) time updating."""
-        self.start_time = monotonic()
-        self.update_timer.resume()
-
-    def stop(self):
-        """Method to stop the time display updating."""
-        self.update_timer.pause()
-        self.total += monotonic() - self.start_time
-        self.time = self.total
-
-    def reset(self):
-        """Method to reset the time display to zero."""
-        self.total = 0
-        self.time = 0
-
-
-class Stopwatch(HorizontalGroup):
-    """A stopwatch widget."""
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        """Event handler called when a button is pressed."""
-        button_id = event.button.id
-        time_display = self.query_one(TimeDisplay)
-        if button_id == "start":
-            time_display.start()
-            self.add_class("started")
-        elif button_id == "stop":
-            time_display.stop()
-            self.remove_class("started")
-        elif button_id == "reset":
-            time_display.reset()
+class ControlPanel(HorizontalGroup):
 
     def compose(self) -> ComposeResult:
-        """Create child widgets of a stopwatch."""
-        yield Button("Start", id="start", variant="success")
-        yield Button("Stop", id="stop", variant="error")
-        yield Button("Reset", id="reset")
-        yield TimeDisplay()
+        yield HorizontalGroup(Button("Pause", id="pause", variant="warning"),
+                               Button("Abort", id="abort", variant="error"),
+                               Button("Submit", id="submit", variant="success"))
 
-
-class StopwatchApp(App):
-    """A Textual app to manage stopwatches."""
-
-    CSS_PATH = "stopwatch.tcss"
-
-    BINDINGS = [
-        ("d", "toggle_dark", "Toggle dark mode"),
-        ("a", "add_stopwatch", "Add"),
-        ("r", "remove_stopwatch", "Remove"),
-    ]
+class QAPanel(HorizontalGroup):        
 
     def compose(self) -> ComposeResult:
-        """Called to add widgets to the app."""
+        yield HorizontalGroup(Markdown(EXAMPLE_QUESTION, id="Q"),
+                              ListView(*list([ListItem(Label(x)) for x in choices]), id="A"))
+                              
+
+class QuizScreen(Screen):
+    """ Quiz Screen """
+    def compose(self) -> ComposeResult:
         yield Header()
         yield Footer()
-        yield VerticalScroll(Stopwatch(), Stopwatch(), Stopwatch(), id="timers")
+        with Vertical():
+            yield ProgressBar()
+            yield ProgressBar()
+            # yield Markdown(EXAMPLE_QUESTION)
+            # yield ListView(*list([ListItem(Label(x)) for x in choices]))
+            yield QAPanel()
+            yield ControlPanel(id="Control_Panel")
 
-    def action_add_stopwatch(self) -> None:
-        """An action to add a timer."""
-        new_stopwatch = Stopwatch()
-        self.query_one("#timers").mount(new_stopwatch)
-        new_stopwatch.scroll_visible()
+class Quizcat(App):
+    """ Main App """
+    BINDINGS = [("d", "toggle_dark", "Toggle dark mode")]
+    TITLE = "QuizCat"
+    SUB_TITLE = "Cognitive Quizzes in the Command Line"
+    CSS_PATH = "quizcat.tcss"
 
-    def action_remove_stopwatch(self) -> None:
-        """Called to remove a timer."""
-        timers = self.query("Stopwatch")
-        if timers:
-            timers.last().remove()
+    def on_ready(self) -> None:
+        self.push_screen(QuizScreen())
 
     def action_toggle_dark(self) -> None:
         """An action to toggle dark mode."""
@@ -103,7 +52,6 @@ class StopwatchApp(App):
             "textual-dark" if self.theme == "textual-light" else "textual-light"
         )
 
-
-if __name__ == "__main__":
-    app = StopwatchApp()
+if __name__=='__main__':
+    app = Quizcat()
     app.run()
