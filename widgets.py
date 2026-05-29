@@ -209,6 +209,49 @@ class PausedPanel(Vertical):
         yield Static("Paused ||", id="paused-title")
 
 
+class SummaryPanel(Vertical):
+    """End-of-quiz score summary.
+
+    Scoring is placeholder-only until real answer checking is wired in.
+    The screen still passes real completion context such as questions
+    submitted and time used.
+    """
+
+    def compose(self) -> ComposeResult:
+        yield Static("Quiz Complete", id="summary-title")
+        yield Static("Score: -- / 50", id="summary-score")
+        yield Static("Submitted: 0 / 50", id="summary-submitted")
+        yield Static("Time Used: 00:00", id="summary-time")
+        yield Static("Accuracy: --%", id="summary-accuracy")
+
+    def update_summary(
+        self,
+        *,
+        answered: int,
+        total_questions: int,
+        elapsed_seconds: float,
+        ended_by_time: bool,
+    ) -> None:
+        """Render the available end-of-quiz summary values."""
+        title = "Time Expired" if ended_by_time else "Quiz Complete"
+        self.query_one("#summary-title", Static).update(title)
+        self.query_one("#summary-score", Static).update(
+            f"Score: -- / {total_questions}"
+        )
+        self.query_one("#summary-submitted", Static).update(
+            f"Submitted: {answered} / {total_questions}"
+        )
+        self.query_one("#summary-time", Static).update(
+            f"Time Used: {self._format_seconds(elapsed_seconds)}"
+        )
+        self.query_one("#summary-accuracy", Static).update("Accuracy: --%")
+
+    @staticmethod
+    def _format_seconds(seconds: float) -> str:
+        minutes, seconds = divmod(int(seconds), 60)
+        return f"{minutes:02}:{seconds:02}"
+
+
 # ---------------------------------------------------------------------------
 # Control panel
 # ---------------------------------------------------------------------------

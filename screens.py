@@ -18,7 +18,14 @@ from textual.screen import Screen
 from textual.widgets import Button, Footer, Header, Switch
 
 from example_question import EXAMPLE_ANSWERS, EXAMPLE_QUESTION
-from widgets import ControlPanel, PausedPanel, ProgressMeter, QAPanel, TimerBar
+from widgets import (
+    ControlPanel,
+    PausedPanel,
+    ProgressMeter,
+    QAPanel,
+    SummaryPanel,
+    TimerBar,
+)
 
 
 class QuizScreen(Screen):
@@ -40,8 +47,8 @@ class QuizScreen(Screen):
         └─────────── Footer ────────────┘
 
     The screen owns runtime quiz state: the 15-minute timer, pause/resume
-    state, timer display mode, answered-question count, and which content
-    panel is visible.
+    state, timer display mode, answered-question count, end state, and
+    which content panel is visible.
     """
 
     TEST_SECONDS = 15 * 60
@@ -51,6 +58,7 @@ class QuizScreen(Screen):
         super().__init__()
         self._answered_questions = 0
         self._elapsed_before_pause = 0.0
+        self._ended = False
         self._paused = False
         self._show_elapsed = False
         self._started_at: float | None = None
@@ -70,6 +78,7 @@ class QuizScreen(Screen):
             # question source the app eventually loads from the CSV bank.
             yield QAPanel(EXAMPLE_QUESTION, EXAMPLE_ANSWERS, id="qa")
             yield PausedPanel(id="paused-panel")
+            yield SummaryPanel(id="summary-panel")
             yield ControlPanel(id="controls")
         yield Footer()
 
@@ -98,30 +107,34 @@ class QuizScreen(Screen):
             event.stop()
 
     def _tick(self) -> None:
-        if not self._paused:
-            self._render_timer()
+        if self._paused or self._ended:
+            return
+
+        self._render_timer()
+        if self._elapsed_seconds() >= self.TEST_SECONDS:
+            self._end_quiz(ended_by_time=True)
 
     def _pause_quiz(self) -> None:
-        if self._paused:
+        if self._paused or self._ended:
             return
 
         self._elapsed_before_pause = self._elapsed_seconds()
         self._started_at = None
         self._paused = True
         self._render_timer()
-        self._sync_pause_controls()
+        self._sync_quiz_state()
 
     def _resume_quiz(self) -> None:
-        if not self._paused:
+        if not self._paused or self._ended:
             return
 
         self._started_at = monotonic()
         self._paused = False
         self._render_timer()
-        self._sync_pause_controls()
+        self._sync_quiz_state()
 
     def _submit_answer(self) -> None:
-        if self._paused:
+        if self._paused or self._ended:
             return
 
         self._answered_questions = min(
@@ -129,6 +142,8 @@ class QuizScreen(Screen):
             self.TOTAL_QUESTIONS,
         )
         self._render_progress()
+        if self._answered_questions >= self.TOTAL_QUESTIONS:
+            self._end_quiz(ended_by_time=False)
 
     def _elapsed_seconds(self) -> float:
         if self._started_at is None:
@@ -151,7 +166,30 @@ class QuizScreen(Screen):
             self.TOTAL_QUESTIONS,
         )
 
-    def _sync_pause_controls(self) -> None:
-        self.query_one("#quiz-body", Vertical).set_class(self._paused, "paused")
-        self.query_one("#controls", ControlPanel).set_class(self._paused, "paused")
-        self.query_one("#submit", Button).disabled = self._paused
+    def _end_quiz(self, *, ended_by_time: bool) -> None:
+        if self._ended:
+            return
+
+        self._elapsed_before_pause = self._elapsed_seconds()
+        self._started_at = None
+        self._paused = False
+        self._ended = True
+        self._render_timer()
+        self.query_one("#summary-panel", SummaryPanel).update_summary(
+            answered=self._answered_questions,
+            total_questions=self.TOTAL_QUESTIONS,
+            elapsed_seconds=self._elapsed_before_pause,
+            ended_by_time=ended_by_time,
+        )
+        self._sync_quiz_state()
+
+    def _sync_quiz_state(self) -> None:
+        quiz_body = self.query_one("#quiz-body", Vertical)
+        quiz_body.set_class(self._paused, "paused")
+        quiz_body.set_class(self._ended, "ended")
+        controls = self.query_one("#controls", ControlPanel)
+        controls.set_class(self._paused, "paused")
+        controls.set_class(self._ended, "ended")
+        self.query_one("#pause", Button).disabled = self._ended
+        self.query_one("#resume", Button).disabled = self._ended
+        self.query_one("#submit", Button).disabled = self._paused or self._ended

@@ -83,7 +83,8 @@ ProgressMeter > ProgressBar {
  * cap at five short strings.                                   */
 
 QAPanel,
-PausedPanel {
+PausedPanel,
+SummaryPanel {
     height: 1fr;
     width: 1fr;
     margin-bottom: 1;
@@ -133,6 +134,13 @@ PausedPanel {
     border: round $warning;
 }
 
+SummaryPanel {
+    display: none;
+    align: center middle;
+    padding: 2 4;
+    border: round $success;
+}
+
 #paused-title {
     width: 1fr;
     height: 1fr;
@@ -141,11 +149,38 @@ PausedPanel {
     color: $warning;
 }
 
+#summary-title {
+    width: 1fr;
+    height: 3;
+    content-align: center middle;
+    text-style: bold;
+    color: $success;
+}
+
+#summary-score,
+#summary-submitted,
+#summary-time,
+#summary-accuracy {
+    width: 1fr;
+    height: 1;
+    margin-top: 1;
+    content-align: center middle;
+}
+
 #quiz-body.paused QAPanel {
     display: none;
 }
 
 #quiz-body.paused PausedPanel {
+    display: block;
+}
+
+#quiz-body.ended QAPanel,
+#quiz-body.ended PausedPanel {
+    display: none;
+}
+
+#quiz-body.ended SummaryPanel {
     display: block;
 }
 
