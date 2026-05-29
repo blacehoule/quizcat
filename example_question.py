@@ -1,9 +1,13 @@
 EXAMPLE_QUESTION = """\
-## Question X
-
 > Choose the word or words that, when inserted in the sentence to replace the blank or blanks, best fits the meaning of the sentence.
 
 The debate quickly became _____, with neither side willing to compromise or entertain the other’s viewpoint.
+"""
+
+QUESTION_TEMPLATE = f"""
+> {{prompt}}
+
+{{stimulus}}
 """
 
 EXAMPLE_ANSWERS = { 

@@ -1,40 +1,229 @@
-ControlPanel {
-    height: 5;
-    width: 1fr;
-    border: tall $background;
-    dock: bottom;
+/* ============================================================
+ * QuizCat stylesheet
+ *
+ * Rules are organised top-down to match what you see on the
+ * quiz screen — body shell first, then the two meters, then
+ * the Q/A area, then the control bar at the bottom. Reading
+ * this file from top to bottom should feel like walking your
+ * eye down a running app.
+ *
+ * Selectors prefer widget class names (e.g. `QAPanel`, `TimerBar`)
+ * over ids so the same look applies wherever a widget is
+ * reused. Ids are used only when a specific instance needs
+ * special treatment.
+ *
+ * Colours are pulled from the active Textual theme via `$`
+ * variables ($primary, $accent, $success, …) instead of being
+ * hard-coded. That means toggling the theme with `d` recolours
+ * everything for free.
+ * ============================================================ */
+
+
+/* --- Screen shell ------------------------------------------ *
+ * `#quiz-body` is the Vertical container that owns the screen
+ * body (everything between the Header and the Footer). A little
+ * outer padding keeps the bordered children from touching the
+ * terminal edges and the Header/Footer bars.                   */
+
+#quiz-body {
+    padding: 1 2;
 }
 
-QAPanel {
-    width: 1fr;
-}
 
-Button {
-    width: 16;
+/* --- Meters (timer + question progress) -------------------- *
+ * Both meters share the same horizontal recipe: a rounded
+ * border with a title, an inner ProgressBar that stretches,
+ * and a trailing value label.
+ *
+ * They diverge only in colour. TimerBar leans on $success
+ * (green) to reinforce pacing — that matches the original
+ * "color green" intent in the layout comments. ProgressMeter
+ * uses $accent so the two are easy to tell apart at a glance.  */
+
+TimerBar,
+ProgressMeter {
     height: 3;
-    margin-left: 1;
+    width: 1fr;
+    align: left middle;
+    margin-bottom: 1;
+    border: round $accent;
+    border-title-align: left;
+    border-title-style: bold;
+}
+
+TimerBar {
+    border: round $success;
+    border-title-color: $success;
+}
+
+ProgressMeter {
+    border-title-color: $accent;
+}
+
+/* Inside each meter the ProgressBar stretches to fill, and the
+   trailing value label hugs the right edge. */
+TimerBar > ProgressBar,
+ProgressMeter > ProgressBar {
+    width: 1fr;
+}
+
+.meter-value {
+    width: 12;
+    padding: 0 1;
+    content-align: right middle;
+    color: $text;
+}
+
+
+/* --- Question + answer panel ------------------------------- *
+ * QAPanel claims all the leftover vertical space between the
+ * meters and the control bar (`height: 1fr`). The question
+ * pane gets the wider column (3fr) because stimuli can be
+ * long; the choices column stays narrow because CCAT items
+ * cap at five short strings.                                   */
+
+QAPanel,
+PausedPanel {
+    height: 1fr;
+    width: 1fr;
+    margin-bottom: 1;
+}
+
+#question {
+    width: 2fr;
     margin-right: 1;
+    padding: 1 2;
+    border: round $primary;
+    border-title-color: $primary;
+    border-title-align: left;
+    border-title-style: bold;
+}
+
+/* Choices column. Width ratio is 1fr to the question's 2fr, so the
+   answers get roughly a third of the horizontal space. There are
+   never more than five items here, so we don't need to plan for
+   overflow — instead we let each item breathe vertically. */
+#choices {
+    width: 1fr;
+    min-width: 36;
+    padding: 0;
+    border: round $accent;
+    border-title-color: $accent;
+    border-title-align: left;
+    border-title-style: bold;
+}
+
+/* Each ListItem gets `1 2` padding so it stands 3 rows tall: a row
+   of top padding, the choice text, a row of bottom padding. That
+   reads as a comfortable button-like target. Padding is on the
+   ListItem rather than the inner Label so Textual's default
+   `--highlight` background covers the whole row. */
+#choices > ListItem {
+    padding: 1 2;
+}
+
+#choices > ListItem > Label {
+    padding: 0;
+    width: 1fr;
+}
+
+PausedPanel {
+    display: none;
+    align: center middle;
+    border: round $warning;
+}
+
+#paused-title {
+    width: 1fr;
+    height: 1fr;
+    content-align: center middle;
+    text-style: bold;
+    color: $warning;
+}
+
+#quiz-body.paused QAPanel {
+    display: none;
+}
+
+#quiz-body.paused PausedPanel {
+    display: block;
+}
+
+
+/* --- Control panel ----------------------------------------- *
+ * A horizontal row of fixed-width buttons. The first three
+ * cluster on the leading edge; Submit is docked to the right
+ * so it always sits at the trailing edge regardless of which
+ * sibling buttons are visible (e.g. when Resume swaps in for
+ * Pause, the layout doesn't shift).                            */
+
+/* The panel needs enough height to fit a `height: 3` button plus
+   the heavy top border (1 row) and a row of padding above and
+   below the buttons. 3 + 1 + 2 = 6, plus 1 spare row of breathing
+   room → height 7. Dropping any of those rows clips the bottom
+   border off the buttons. */
+ControlPanel {
+    height: 7;
+    width: 1fr;
+    align: left middle;
+    padding: 1 1;
+    border-top: heavy $panel;
+}
+
+ControlPanel Button {
+    width: 14;
+    height: 3;
+    margin: 0 1;
+}
+
+#timer-mode-control {
+    width: 20;
+    height: 3;
+    align: left middle;
+    margin: 0 1;
+}
+
+#timer-mode-control Label {
+    width: 9;
+    padding: 0 1;
+    content-align: right middle;
+}
+
+#timer-mode {
+    width: 6;
+    height: 1;
+    padding: 0;
+    border: none;
+    background: transparent;
+}
+
+#timer-mode:focus,
+#timer-mode:hover {
+    border: none;
+    background: transparent;
+    background-tint: transparent 0%;
+}
+
+#timer-mode .switch--slider {
+    background: transparent;
 }
 
 #submit {
     dock: right;
+    margin: 0 1;
 }
 
-#Q {
-    dock: left;
-    width: 0.6fr;
+/* Resume is mounted but invisible until the screen adds the `paused`
+   class to the control panel. That swaps Pause <-> Resume in place,
+   without shifting the neighbouring buttons. */
+#resume {
+    display: none;
 }
 
-#A {
-    dock: right;
+#controls.paused #pause {
+    display: none;
 }
 
-ListView {
-    margin: 2 2;
-    width: 30;
+#controls.paused #resume {
+    display: block;
 }
-
-Label {
-    padding: 1 2;
-}
-
