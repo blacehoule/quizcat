@@ -182,7 +182,7 @@ class QAPanel(Horizontal):
         # VerticalScroll is what makes long content scroll instead of
         # squishing the rest of the layout.
         question_pane = VerticalScroll(
-            Markdown(self._prompt_markdown),
+            Markdown(self._prompt_markdown, id="question-markdown"),
             id="question",
         )
         question_pane.border_title = "Question"
@@ -196,10 +196,37 @@ class QAPanel(Horizontal):
                 ListItem(Label(f"{label}. {text}"))
                 for label, text in self._choices.items()
             ],
+            initial_index=None,
             id="choices",
         )
         choices_pane.border_title = "Choices"
         yield choices_pane
+
+    async def update_question(
+        self,
+        prompt_markdown: str,
+        choices: dict[str, str],
+    ) -> None:
+        """Render a new question and reset answer selection."""
+        self._prompt_markdown = prompt_markdown
+        self._choices = choices
+
+        await self.query_one("#question-markdown", Markdown).update(prompt_markdown)
+        choices_pane = self.query_one("#choices", ListView)
+        await choices_pane.clear()
+        for label, text in choices.items():
+            await choices_pane.append(ListItem(Label(f"{label}. {text}")))
+        choices_pane.index = None
+
+    def selected_choice_label(self) -> str | None:
+        """Return the currently highlighted choice label, if any."""
+        choices_pane = self.query_one("#choices", ListView)
+        if choices_pane.index is None:
+            return None
+        labels = tuple(self._choices)
+        if choices_pane.index >= len(labels):
+            return None
+        return labels[choices_pane.index]
 
 
 class PausedPanel(Vertical):
@@ -210,12 +237,7 @@ class PausedPanel(Vertical):
 
 
 class SummaryPanel(Vertical):
-    """End-of-quiz score summary.
-
-    Scoring is placeholder-only until real answer checking is wired in.
-    The screen still passes real completion context such as questions
-    submitted and time used.
-    """
+    """End-of-quiz score summary."""
 
     def compose(self) -> ComposeResult:
         yield Static("Quiz Complete", id="summary-title")
@@ -228,6 +250,7 @@ class SummaryPanel(Vertical):
         self,
         *,
         answered: int,
+        correct: int,
         total_questions: int,
         elapsed_seconds: float,
         ended_by_time: bool,
@@ -236,7 +259,7 @@ class SummaryPanel(Vertical):
         title = "Time Expired" if ended_by_time else "Quiz Complete"
         self.query_one("#summary-title", Static).update(title)
         self.query_one("#summary-score", Static).update(
-            f"Score: -- / {total_questions}"
+            f"Score: {correct} / {total_questions}"
         )
         self.query_one("#summary-submitted", Static).update(
             f"Submitted: {answered} / {total_questions}"
@@ -244,7 +267,10 @@ class SummaryPanel(Vertical):
         self.query_one("#summary-time", Static).update(
             f"Time Used: {self._format_seconds(elapsed_seconds)}"
         )
-        self.query_one("#summary-accuracy", Static).update("Accuracy: --%")
+        accuracy = (correct / answered) * 100 if answered else 0
+        self.query_one("#summary-accuracy", Static).update(
+            f"Accuracy: {accuracy:.0f}%"
+        )
 
     @staticmethod
     def _format_seconds(seconds: float) -> str:
@@ -270,9 +296,8 @@ class ControlPanel(Horizontal):
     * **Abort**  — leave the current quiz and return to the dashboard.
     * **Elapsed switch** — toggles the timer readout between remaining time
       and elapsed time. The progress bar always tracks elapsed time.
-    * **Submit** — count the current example question as answered. Real
-      answer validation will replace that placeholder behaviour once the
-      CSV bank is wired in.
+    * **Submit** — persist the highlighted answer and advance to the next
+      question.
     * **Dashboard** — mounted hidden until the quiz ends, then replaces
       Submit as the only visible action.
 

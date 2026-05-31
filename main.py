@@ -20,6 +20,7 @@ Run from a uv-managed checkout with::
 from textual.app import App
 
 from screens import DashboardScreen
+from services import QuizService, create_quiz_service
 
 
 class QuizCat(App):
@@ -43,6 +44,10 @@ class QuizCat(App):
         ("d", "toggle_dark", "Toggle dark mode"),
     ]
 
+    def __init__(self) -> None:
+        super().__init__()
+        self.quiz_service: QuizService = create_quiz_service()
+
     def on_ready(self) -> None:
         """Push the dashboard once the app's first layout pass is done.
 
@@ -51,7 +56,11 @@ class QuizCat(App):
         one-frame flicker where the unframed default screen briefly shows
         through.
         """
-        self.push_screen(DashboardScreen())
+        self.push_screen(DashboardScreen(quiz_service=self.quiz_service))
+
+    def on_unmount(self) -> None:
+        """Close the SQLite connection when the TUI exits."""
+        self.quiz_service.close()
 
     def action_toggle_dark(self) -> None:
         """Flip between Textual's bundled light and dark themes.

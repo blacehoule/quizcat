@@ -6,8 +6,8 @@ remaining, whether the test is paused). Widgets composed inside a screen
 should not reach back into that state directly; they receive data through
 their constructors and expose events, and the screen mediates between them.
 
-For now the only screen is `QuizScreen`. A future menu screen and post-quiz
-results screen will sit alongside it in this module.
+The screen classes stay focused on UI state and delegate persistence,
+scoring, and question loading to `QuizService`.
 """
 
 from time import monotonic
@@ -17,7 +17,8 @@ from textual.containers import Vertical
 from textual.screen import Screen
 from textual.widgets import Button, Footer, Header, Label, ListItem, ListView, Switch
 
-from example_question import EXAMPLE_ANSWERS, EXAMPLE_QUESTION
+from models import Question, QuizAttempt, QuizResult, TestDefinition, TestSummary
+from services import QuizService
 from widgets import (
     ControlPanel,
     PausedPanel,
@@ -27,21 +28,25 @@ from widgets import (
     TimerBar,
 )
 
-EXAM_OPTIONS = tuple(f"Sample Exam {exam_number}" for exam_number in range(1, 9))
-
 
 class DashboardScreen(Screen):
     """Start screen for choosing which sample exam to practice."""
 
+    def __init__(self, *, quiz_service: QuizService) -> None:
+        super().__init__()
+        self._quiz_service = quiz_service
+        self._tests: list[TestSummary] = self._quiz_service.list_tests()
+
     def compose(self) -> ComposeResult:
         yield Header()
         with Vertical(id="dashboard-body"):
-            yield Label("Choose a Sample Exam", id="dashboard-title")
+            yield Label("Choose a Practice Test", id="dashboard-title")
             yield ListView(
                 *[
-                    ListItem(Label(exam_name), id=f"exam-{index + 1}")
-                    for index, exam_name in enumerate(EXAM_OPTIONS)
+                    ListItem(Label(self._test_label(test)), id=f"test-{test.id}")
+                    for test in self._tests
                 ],
+                initial_index=0 if self._tests else None,
                 id="exam-list",
             )
             yield Button("Start Quiz", id="start-quiz", variant="success")
@@ -49,19 +54,30 @@ class DashboardScreen(Screen):
 
     def on_mount(self) -> None:
         self.query_one("#exam-list", ListView).border_title = "Available Exams"
+        self.query_one("#start-quiz", Button).disabled = not self._tests
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "start-quiz":
             self._start_selected_quiz()
 
     def _start_selected_quiz(self) -> None:
+        if not self._tests:
+            return
+
         exam_list = self.query_one("#exam-list", ListView)
         selected_index = exam_list.index or 0
+        selected_test = self._tests[selected_index]
         self.app.push_screen(
             QuizScreen(
-                selected_exam=EXAM_OPTIONS[selected_index],
+                quiz_service=self._quiz_service,
+                test=self._quiz_service.get_test(selected_test.id),
             )
         )
+
+    @staticmethod
+    def _test_label(test: TestSummary) -> str:
+        minutes = test.time_limit_seconds // 60
+        return f"{test.title} - {test.question_count} questions / {minutes} min"
 
 
 class QuizScreen(Screen):
@@ -87,13 +103,17 @@ class QuizScreen(Screen):
     which content panel is visible.
     """
 
-    TEST_SECONDS = 15 * 60
-    TOTAL_QUESTIONS = 50
-
-    def __init__(self, *, selected_exam: str) -> None:
+    def __init__(self, *, quiz_service: QuizService, test: TestDefinition) -> None:
+        if not test.questions:
+            raise ValueError("A quiz test must include at least one question")
         super().__init__()
-        self.selected_exam = selected_exam
+        self._quiz_service = quiz_service
+        self.test = test
+        self._attempt: QuizAttempt | None = None
+        self._result: QuizResult | None = None
         self._answered_questions = 0
+        self._correct_answers = 0
+        self._current_index = 0
         self._elapsed_before_pause = 0.0
         self._ended = False
         self._paused = False
@@ -110,10 +130,14 @@ class QuizScreen(Screen):
         with Vertical(id="quiz-body"):
             yield TimerBar(id="timer")
             yield ProgressMeter(id="progress")
-            # The example question is imported at the screen layer (rather
-            # than inside QAPanel) so QAPanel itself stays reusable for any
-            # question source the app eventually loads from the CSV bank.
-            yield QAPanel(EXAMPLE_QUESTION, EXAMPLE_ANSWERS, id="qa")
+            # The screen formats question data before passing it into
+            # QAPanel, so the widget stays reusable for any question source.
+            first_question = self._current_question()
+            yield QAPanel(
+                self._quiz_service.question_markdown(first_question),
+                self._choices_for_question(first_question),
+                id="qa",
+            )
             yield PausedPanel(id="paused-panel")
             yield SummaryPanel(id="summary-panel")
             yield ControlPanel(id="controls")
@@ -121,10 +145,21 @@ class QuizScreen(Screen):
 
     def on_mount(self) -> None:
         """Start the quiz timer after the screen is mounted."""
+        self._attempt = self._quiz_service.start_attempt(
+            self.test.id,
+            self.total_questions,
+        )
         self._started_at = monotonic()
+        self._render_timer()
+        self._render_progress()
+        self._sync_quiz_state()
         self.set_interval(0.25, self._tick)
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
+    def on_unmount(self) -> None:
+        """Do not leave interrupted attempts marked as in progress."""
+        self._abort_attempt_if_needed()
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle control-panel button presses."""
         match event.button.id:
             case "pause":
@@ -134,7 +169,7 @@ class QuizScreen(Screen):
             case "abort":
                 self._return_to_dashboard()
             case "submit":
-                self._submit_answer()
+                await self._submit_answer()
             case "return-dashboard":
                 self._return_to_dashboard()
 
@@ -145,12 +180,18 @@ class QuizScreen(Screen):
             self._render_timer()
             event.stop()
 
+    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+        """Enable Submit once the user has highlighted an answer choice."""
+        if event.list_view.id == "choices":
+            self._sync_quiz_state()
+            event.stop()
+
     def _tick(self) -> None:
         if self._paused or self._ended:
             return
 
         self._render_timer()
-        if self._elapsed_seconds() >= self.TEST_SECONDS:
+        if self._elapsed_seconds() >= self.time_limit_seconds:
             self._end_quiz(ended_by_time=True)
 
     def _pause_quiz(self) -> None:
@@ -172,37 +213,64 @@ class QuizScreen(Screen):
         self._render_timer()
         self._sync_quiz_state()
 
-    def _submit_answer(self) -> None:
+    async def _submit_answer(self) -> None:
         if self._paused or self._ended:
             return
 
-        self._answered_questions = min(
-            self._answered_questions + 1,
-            self.TOTAL_QUESTIONS,
+        selected_choice_label = self.query_one(
+            "#qa",
+            QAPanel,
+        ).selected_choice_label()
+        if selected_choice_label is None or self._attempt is None:
+            self._sync_quiz_state()
+            return
+
+        answer = self._quiz_service.submit_answer(
+            attempt_id=self._attempt.id,
+            question=self._current_question(),
+            question_position=self._current_index + 1,
+            selected_choice_label=selected_choice_label,
+            elapsed_seconds=self._elapsed_seconds(),
         )
+        self._answered_questions += 1
+        if answer.is_correct:
+            self._correct_answers += 1
+        self._current_index += 1
+
         self._render_progress()
-        if self._answered_questions >= self.TOTAL_QUESTIONS:
+        if self._current_index >= self.total_questions:
             self._end_quiz(ended_by_time=False)
+            return
+
+        await self._render_current_question()
+        self._sync_quiz_state()
 
     def _elapsed_seconds(self) -> float:
         if self._started_at is None:
             return self._elapsed_before_pause
         return min(
             self._elapsed_before_pause + (monotonic() - self._started_at),
-            self.TEST_SECONDS,
+            self.time_limit_seconds,
         )
 
     def _render_timer(self) -> None:
         self.query_one("#timer", TimerBar).update_time(
             self._elapsed_seconds(),
-            self.TEST_SECONDS,
+            self.time_limit_seconds,
             show_elapsed=self._show_elapsed,
         )
 
     def _render_progress(self) -> None:
         self.query_one("#progress", ProgressMeter).update_progress(
             self._answered_questions,
-            self.TOTAL_QUESTIONS,
+            self.total_questions,
+        )
+
+    async def _render_current_question(self) -> None:
+        question = self._current_question()
+        await self.query_one("#qa", QAPanel).update_question(
+            self._quiz_service.question_markdown(question),
+            self._choices_for_question(question),
         )
 
     def _end_quiz(self, *, ended_by_time: bool) -> None:
@@ -213,10 +281,21 @@ class QuizScreen(Screen):
         self._started_at = None
         self._paused = False
         self._ended = True
+        if self._attempt is not None:
+            self._result = self._quiz_service.finish_attempt(
+                attempt_id=self._attempt.id,
+                status="timed_out" if ended_by_time else "completed",
+                elapsed_seconds=self._elapsed_before_pause,
+                total_questions=self.total_questions,
+            )
+            self._answered_questions = self._result.answered_count
+            self._correct_answers = self._result.correct_count
         self._render_timer()
+        self._render_progress()
         self.query_one("#summary-panel", SummaryPanel).update_summary(
             answered=self._answered_questions,
-            total_questions=self.TOTAL_QUESTIONS,
+            correct=self._correct_answers,
+            total_questions=self.total_questions,
             elapsed_seconds=self._elapsed_before_pause,
             ended_by_time=ended_by_time,
         )
@@ -231,7 +310,38 @@ class QuizScreen(Screen):
         controls.set_class(self._ended, "ended")
         self.query_one("#pause", Button).disabled = self._ended
         self.query_one("#resume", Button).disabled = self._ended
-        self.query_one("#submit", Button).disabled = self._paused or self._ended
+        has_selection = (
+            self.query_one("#qa", QAPanel).selected_choice_label() is not None
+        )
+        self.query_one("#submit", Button).disabled = (
+            self._paused or self._ended or not has_selection
+        )
 
     def _return_to_dashboard(self) -> None:
+        self._abort_attempt_if_needed()
         self.app.pop_screen()
+
+    def _abort_attempt_if_needed(self) -> None:
+        if self._ended or self._attempt is None:
+            return
+        self._quiz_service.abort_attempt(
+            attempt_id=self._attempt.id,
+            elapsed_seconds=self._elapsed_seconds(),
+            total_questions=self.total_questions,
+        )
+        self._attempt = None
+
+    def _current_question(self) -> Question:
+        return self.test.questions[self._current_index]
+
+    @property
+    def total_questions(self) -> int:
+        return len(self.test.questions)
+
+    @property
+    def time_limit_seconds(self) -> int:
+        return self.test.time_limit_seconds
+
+    @staticmethod
+    def _choices_for_question(question: Question) -> dict[str, str]:
+        return {choice.label: choice.text for choice in question.choices}
