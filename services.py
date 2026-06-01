@@ -166,4 +166,4 @@ def _image_markdown(stimulus: str, image_asset_dir: Path | None) -> str:
     if not image_path.exists():
         return f"_Image stimulus unavailable: `{stimulus}`_"
 
-    return f"![Question image]({image_path})"
+    return f"![Question image](./images/{image_path})"
