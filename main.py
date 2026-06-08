@@ -17,10 +17,15 @@ Run from a uv-managed checkout with::
     uv run python main.py
 """
 
+from pathlib import Path
+
 from textual.app import App
 
 from screens import DashboardScreen
 from services import QuizService, create_quiz_service
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent
 
 
 class QuizCat(App):
@@ -46,7 +51,9 @@ class QuizCat(App):
 
     def __init__(self) -> None:
         super().__init__()
-        self.quiz_service: QuizService = create_quiz_service()
+        self.quiz_service: QuizService = create_quiz_service(
+            image_asset_dir=PROJECT_ROOT / "images",
+        )
 
     def on_ready(self) -> None:
         """Push the dashboard once the app's first layout pass is done.

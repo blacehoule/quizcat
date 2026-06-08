@@ -135,6 +135,25 @@ SummaryPanel {
     border-title-style: bold;
 }
 
+QuestionImageDisplay {
+    display: none;
+    margin-top: 1;
+}
+
+QuestionImageDisplay.available {
+    display: block;
+}
+
+#question-image-fallback {
+    display: none;
+    color: $warning;
+    text-style: italic;
+}
+
+QuestionImageDisplay.unavailable #question-image-fallback {
+    display: block;
+}
+
 /* Choices column. Width ratio is 1fr to the question's 2fr, so the
    answers get roughly a third of the horizontal space. There are
    never more than five items here, so we don't need to plan for

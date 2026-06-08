@@ -8,6 +8,7 @@ the seed CSV column-for-column.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,14 @@ class Question:
             if choice.label.upper() == normalized:
                 return choice
         return None
+
+
+@dataclass(frozen=True)
+class QuestionContent:
+    """Presentation-ready question content for the TUI."""
+
+    markdown: str
+    image_path: Path | None = None
 
 
 @dataclass(frozen=True)

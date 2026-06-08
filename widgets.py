@@ -15,6 +15,7 @@ id (e.g. `#question`). Control behaviour belongs on the screen, not here.
 """
 
 from math import ceil, floor
+from pathlib import Path
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -28,6 +29,12 @@ from textual.widgets import (
     Static,
     Switch,
 )
+
+from image_rendering import QuestionImageRenderer, select_question_image_renderer
+from models import QuestionContent
+
+
+QUESTION_IMAGE_RENDERER = select_question_image_renderer()
 
 
 # ---------------------------------------------------------------------------
@@ -152,11 +159,10 @@ class QAPanel(Horizontal):
 
     Parameters
     ----------
-    prompt_markdown:
-        The full Markdown body for the question — typically prompt +
-        stimulus joined into the template defined in `example_question.py`.
-        Passed in by the screen rather than imported here so the widget
-        stays reusable for any question source.
+    question_content:
+        Presentation-ready question body. Text stimuli are rendered as
+        Markdown, and image stimuli provide a resolved path for the image
+        widget.
     choices:
         Mapping of choice label (``"A".."E"``) to choice text. Iteration
         order is preserved as-is, because the CCAT bank ships choices in
@@ -166,7 +172,7 @@ class QAPanel(Horizontal):
 
     def __init__(
         self,
-        prompt_markdown: str,
+        question_content: QuestionContent,
         choices: dict[str, str],
         **kwargs,
     ) -> None:
@@ -174,7 +180,7 @@ class QAPanel(Horizontal):
         # Stash the inputs on the instance; `compose` is the first place
         # they're actually consumed (after `__init__` returns, but before
         # `on_mount`).
-        self._prompt_markdown = prompt_markdown
+        self._question_content = question_content
         self._choices = choices
 
     def compose(self) -> ComposeResult:
@@ -182,7 +188,11 @@ class QAPanel(Horizontal):
         # VerticalScroll is what makes long content scroll instead of
         # squishing the rest of the layout.
         question_pane = VerticalScroll(
-            Markdown(self._prompt_markdown, id="question-markdown"),
+            Markdown(self._question_content.markdown, id="question-markdown"),
+            QuestionImageDisplay(
+                self._question_content.image_path,
+                id="question-image-display",
+            ),
             id="question",
         )
         question_pane.border_title = "Question"
@@ -204,14 +214,20 @@ class QAPanel(Horizontal):
 
     async def update_question(
         self,
-        prompt_markdown: str,
+        question_content: QuestionContent,
         choices: dict[str, str],
     ) -> None:
         """Render a new question and reset answer selection."""
-        self._prompt_markdown = prompt_markdown
+        self._question_content = question_content
         self._choices = choices
 
-        await self.query_one("#question-markdown", Markdown).update(prompt_markdown)
+        await self.query_one("#question-markdown", Markdown).update(
+            question_content.markdown
+        )
+        self.query_one("#question-image-display", QuestionImageDisplay).update_image(
+            question_content.image_path
+        )
+
         choices_pane = self.query_one("#choices", ListView)
         await choices_pane.clear()
         for label, text in choices.items():
@@ -227,6 +243,49 @@ class QAPanel(Horizontal):
         if choices_pane.index >= len(labels):
             return None
         return labels[choices_pane.index]
+
+
+class QuestionImageDisplay(Vertical):
+    """Display an image stimulus only when a native renderer is available."""
+
+    def __init__(
+        self,
+        image_path: Path | None,
+        *,
+        renderer: QuestionImageRenderer = QUESTION_IMAGE_RENDERER,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._image_path = image_path
+        self._renderer = renderer
+        self._image_widget = None
+
+    def compose(self) -> ComposeResult:
+        if self._renderer.widget_class is not None:
+            self._image_widget = self._renderer.widget_class(
+                self._image_path,
+                id="question-image",
+            )
+            yield self._image_widget
+        yield Static("", id="question-image-fallback")
+
+    def on_mount(self) -> None:
+        self._sync_display_state()
+
+    def update_image(self, image_path: Path | None) -> None:
+        self._image_path = image_path
+        if self._image_widget is not None:
+            self._image_widget.image = image_path
+        self._sync_display_state()
+
+    def _sync_display_state(self) -> None:
+        has_image = self._image_path is not None
+        unavailable = has_image and self._renderer.widget_class is None
+        self.set_class(has_image, "available")
+        self.set_class(unavailable, "unavailable")
+        self.query_one("#question-image-fallback", Static).update(
+            self._renderer.unavailable_reason if unavailable else ""
+        )
 
 
 class PausedPanel(Vertical):

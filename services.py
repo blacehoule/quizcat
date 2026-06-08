@@ -12,6 +12,7 @@ from pathlib import Path
 from models import (
     AttemptAnswer,
     Question,
+    QuestionContent,
     QuizAttempt,
     QuizResult,
     TestDefinition,
@@ -113,6 +114,12 @@ class QuizService:
             image_asset_dir=self.image_asset_dir,
         )
 
+    def question_content(self, question: Question) -> QuestionContent:
+        return format_question_content(
+            question,
+            image_asset_dir=self.image_asset_dir,
+        )
+
 
 def create_quiz_service(
     *,
@@ -136,34 +143,64 @@ def format_question_markdown(
     image_asset_dir: Path | None = None,
 ) -> str:
     """Build the Markdown body for a question without mutating the model."""
+    content = format_question_content(
+        question,
+        image_asset_dir=image_asset_dir,
+        include_image_markdown=True,
+    )
+    return content.markdown
+
+
+def format_question_content(
+    question: Question,
+    *,
+    image_asset_dir: Path | None = None,
+    include_image_markdown: bool = False,
+) -> QuestionContent:
+    """Build presentation content for a question without mutating the model."""
     parts: list[str] = []
     if question.prompt.strip():
         parts.append(_blockquote(question.prompt.strip()))
 
     match question.stimulus_type:
         case "image":
-            parts.append(_image_markdown(question.stimulus, image_asset_dir))
+            image_path = resolve_image_path(question.stimulus, image_asset_dir)
+            if image_path is None:
+                parts.append(f"_Image stimulus unavailable: `{question.stimulus}`_")
+                return QuestionContent(markdown=_join_markdown_parts(parts))
+            if include_image_markdown:
+                parts.append(_image_markdown(image_path))
+            return QuestionContent(
+                markdown=_join_markdown_parts(parts),
+                image_path=image_path,
+            )
         case "text_table":
             parts.append(f"```\n{question.stimulus}\n```")
         case _:
             parts.append(question.stimulus)
 
-    return "\n\n".join(part for part in parts if part.strip())
+    return QuestionContent(markdown=_join_markdown_parts(parts))
+
+
+def resolve_image_path(stimulus: str, image_asset_dir: Path | None) -> Path | None:
+    """Resolve an image stimulus filename to an existing filesystem path."""
+    image_path = Path(stimulus)
+    if not image_path.is_absolute() and image_asset_dir is not None:
+        image_path = image_asset_dir / image_path
+
+    if not image_path.exists():
+        return None
+
+    return image_path
 
 
 def _blockquote(text: str) -> str:
     return "\n".join(f"> {line}" if line else ">" for line in text.splitlines())
 
 
-def _image_markdown(stimulus: str, image_asset_dir: Path | None) -> str:
-    if image_asset_dir is None:
-        return f"![Question image]({stimulus})"
+def _join_markdown_parts(parts: list[str]) -> str:
+    return "\n\n".join(part for part in parts if part.strip())
 
-    image_path = Path(stimulus)
-    if not image_path.is_absolute():
-        image_path = image_asset_dir / stimulus
 
-    if not image_path.exists():
-        return f"_Image stimulus unavailable: `{stimulus}`_"
-
-    return f"![Question image](./images/{image_path})"
+def _image_markdown(image_path: Path) -> str:
+    return f"![Question image]({image_path})"

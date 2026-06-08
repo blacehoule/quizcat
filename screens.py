@@ -134,7 +134,7 @@ class QuizScreen(Screen):
             # QAPanel, so the widget stays reusable for any question source.
             first_question = self._current_question()
             yield QAPanel(
-                self._quiz_service.question_markdown(first_question),
+                self._quiz_service.question_content(first_question),
                 self._choices_for_question(first_question),
                 id="qa",
             )
@@ -269,7 +269,7 @@ class QuizScreen(Screen):
     async def _render_current_question(self) -> None:
         question = self._current_question()
         await self.query_one("#qa", QAPanel).update_question(
-            self._quiz_service.question_markdown(question),
+            self._quiz_service.question_content(question),
             self._choices_for_question(question),
         )
 

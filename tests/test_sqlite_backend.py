@@ -6,7 +6,11 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 
-from services import create_quiz_service, format_question_markdown
+from services import (
+    create_quiz_service,
+    format_question_content,
+    format_question_markdown,
+)
 from storage import (
     DEFAULT_CSV_PATH,
     SeedValidationError,
@@ -156,15 +160,55 @@ class SQLiteBackendTests(unittest.TestCase):
         with self.assertRaises(SeedValidationError):
             validate_seed_row(row)
 
-    def test_image_markdown_uses_stimulus_as_image_target(self) -> None:
+    def test_image_question_content_resolves_image_asset_path(self) -> None:
+        image_dir = DEFAULT_CSV_PATH.parent / "images"
         test = self.service.get_test(self.service.list_tests()[0].id)
         image_question = next(
             question for question in test.questions if question.stimulus_type == "image"
         )
 
-        markdown = format_question_markdown(image_question)
+        content = format_question_content(
+            image_question,
+            image_asset_dir=image_dir,
+        )
 
-        self.assertIn(f"![Question image]({image_question.stimulus})", markdown)
+        self.assertEqual(image_dir / image_question.stimulus, content.image_path)
+        self.assertIn(image_question.prompt, content.markdown)
+        self.assertNotIn("![Question image]", content.markdown)
+
+    def test_image_markdown_uses_resolved_image_path_when_requested(self) -> None:
+        image_dir = DEFAULT_CSV_PATH.parent / "images"
+        test = self.service.get_test(self.service.list_tests()[0].id)
+        image_question = next(
+            question for question in test.questions if question.stimulus_type == "image"
+        )
+
+        markdown = format_question_markdown(
+            image_question,
+            image_asset_dir=image_dir,
+        )
+
+        self.assertIn(
+            f"![Question image]({image_dir / image_question.stimulus})",
+            markdown,
+        )
+
+    def test_missing_image_question_content_shows_fallback_text(self) -> None:
+        test = self.service.get_test(self.service.list_tests()[0].id)
+        image_question = next(
+            question for question in test.questions if question.stimulus_type == "image"
+        )
+
+        content = format_question_content(
+            image_question,
+            image_asset_dir=Path(self._temp_dir.name),
+        )
+
+        self.assertIsNone(content.image_path)
+        self.assertIn(
+            f"Image stimulus unavailable: `{image_question.stimulus}`",
+            content.markdown,
+        )
 
 
 if __name__ == "__main__":
