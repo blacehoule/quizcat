@@ -161,7 +161,7 @@ def format_question_content(
                 image_path=image_path,
             )
         case "text_table":
-            parts.append(f"```\n{question.stimulus}\n```")
+            parts.append(_format_text_table(question))
         case _:
             parts.append(question.stimulus)
 
@@ -186,6 +186,54 @@ def _blockquote(text: str) -> str:
 
 def _join_markdown_parts(parts: list[str]) -> str:
     return "\n\n".join(part for part in parts if part.strip())
+
+
+def _format_text_table(question: Question) -> str:
+    rows = _parse_text_table_rows(question.stimulus)
+    if not rows:
+        return question.stimulus
+
+    if question.question_type == "Attention to Detail":
+        width = max(len(row) for row in rows)
+        return _markdown_table([""] * width, rows)
+
+    header = rows[0]
+    body = rows[1:]
+    if body and all(len(row) == len(header) for row in body):
+        return _markdown_table(header, body)
+
+    width = max(len(row) for row in rows)
+    return _markdown_table([""] * width, rows)
+
+
+def _parse_text_table_rows(stimulus: str) -> list[list[str]]:
+    return [
+        [_escape_table_cell(cell.strip()) for cell in row.split("|")]
+        for row in stimulus.split(";")
+        if row.strip()
+    ]
+
+
+def _markdown_table(header: list[str], rows: list[list[str]]) -> str:
+    width = len(header)
+    lines = [
+        _markdown_table_row(_pad_cells(header, width)),
+        _markdown_table_row(["---"] * width),
+    ]
+    lines.extend(_markdown_table_row(_pad_cells(row, width)) for row in rows)
+    return "\n".join(lines)
+
+
+def _markdown_table_row(cells: list[str]) -> str:
+    return f"| {' | '.join(cells)} |"
+
+
+def _pad_cells(cells: list[str], width: int) -> list[str]:
+    return [*cells[:width], *([""] * max(width - len(cells), 0))]
+
+
+def _escape_table_cell(cell: str) -> str:
+    return cell.replace("|", "\\|")
 
 
 def _image_markdown(image_path: Path) -> str:

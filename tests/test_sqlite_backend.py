@@ -96,6 +96,56 @@ class SQLiteBackendTests(unittest.TestCase):
             choice.position for choice in three_choice_question.choices
         ))
 
+    def test_attention_to_detail_stimulus_renders_as_table_without_headers(
+        self,
+    ) -> None:
+        test = self.service.get_test(self.service.list_tests()[0].id)
+        question = next(
+            question
+            for question in test.questions
+            if question.question_type == "Attention to Detail"
+        )
+
+        content = format_question_content(question)
+
+        self.assertNotIn("```", content.markdown)
+        self.assertNotIn("Left", content.markdown)
+        self.assertNotIn("Right", content.markdown)
+        self.assertIn("|  |  |", content.markdown)
+        self.assertIn("| --- | --- |", content.markdown)
+        self.assertIn(
+            "| Apex Consulting LLC | Apex Consulting LCC |",
+            content.markdown,
+        )
+        self.assertIn(
+            "| Banner Technologies | Banner Technologies |",
+            content.markdown,
+        )
+
+    def test_text_table_stimulus_uses_first_row_as_header_when_present(
+        self,
+    ) -> None:
+        question = next(
+            question
+            for test_summary in self.service.list_tests()
+            for question in self.service.get_test(test_summary.id).questions
+            if question.question_type == "Tables & Graphs"
+            and question.stimulus_type == "text_table"
+        )
+
+        content = format_question_content(question)
+
+        self.assertNotIn("```", content.markdown)
+        self.assertIn(
+            "| Sector | 2020 Consumption (TWh) | 2021 Consumption (TWh) |",
+            content.markdown,
+        )
+        self.assertIn("| --- | --- | --- |", content.markdown)
+        self.assertIn(
+            "| Transportation | 1000 | 1200 |",
+            content.markdown,
+        )
+
     def test_answer_evaluation_does_not_store_unfinished_attempts(self) -> None:
         test = self.service.get_test(self.service.list_tests()[0].id)
         first_question = test.questions[0]
