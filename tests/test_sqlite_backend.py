@@ -96,9 +96,31 @@ class SQLiteBackendTests(unittest.TestCase):
             choice.position for choice in three_choice_question.choices
         ))
 
-    def test_attempt_records_per_question_answer_and_score(self) -> None:
+    def test_answer_evaluation_does_not_store_unfinished_attempts(self) -> None:
         test = self.service.get_test(self.service.list_tests()[0].id)
-        attempt = self.service.start_attempt(test.id, len(test.questions))
+        first_question = test.questions[0]
+
+        answer = self.service.evaluate_answer(
+            question=first_question,
+            question_position=1,
+            selected_choice_label=first_question.correct_choice_label,
+            elapsed_seconds=5.0,
+        )
+
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            attempt_count = connection.execute(
+                "SELECT COUNT(*) FROM attempts"
+            ).fetchone()[0]
+            answer_count = connection.execute(
+                "SELECT COUNT(*) FROM attempt_answers"
+            ).fetchone()[0]
+
+        self.assertTrue(answer.is_correct)
+        self.assertEqual(0, attempt_count)
+        self.assertEqual(0, answer_count)
+
+    def test_finished_attempt_records_answers_and_score(self) -> None:
+        test = self.service.get_test(self.service.list_tests()[0].id)
         first_question = test.questions[0]
         second_question = test.questions[1]
         wrong_second_choice = next(
@@ -107,32 +129,101 @@ class SQLiteBackendTests(unittest.TestCase):
             if choice.label != second_question.correct_choice_label
         )
 
-        first_answer = self.service.submit_answer(
-            attempt_id=attempt.id,
+        first_answer = self.service.evaluate_answer(
             question=first_question,
             question_position=1,
             selected_choice_label=first_question.correct_choice_label,
             elapsed_seconds=5.0,
         )
-        second_answer = self.service.submit_answer(
-            attempt_id=attempt.id,
+        second_answer = self.service.evaluate_answer(
             question=second_question,
             question_position=2,
             selected_choice_label=wrong_second_choice,
             elapsed_seconds=10.0,
         )
-        result = self.service.finish_attempt(
-            attempt_id=attempt.id,
+        result = self.service.record_finished_attempt(
+            test_id=test.id,
             status="completed",
             elapsed_seconds=10.0,
             total_questions=len(test.questions),
+            answers=(first_answer, second_answer),
         )
+
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            attempt_count = connection.execute(
+                "SELECT COUNT(*) FROM attempts"
+            ).fetchone()[0]
+            answer_count = connection.execute(
+                "SELECT COUNT(*) FROM attempt_answers"
+            ).fetchone()[0]
 
         self.assertTrue(first_answer.is_correct)
         self.assertFalse(second_answer.is_correct)
+        self.assertEqual(1, attempt_count)
+        self.assertEqual(2, answer_count)
         self.assertEqual(2, result.answered_count)
         self.assertEqual(1, result.correct_count)
         self.assertEqual(50, result.total_questions)
+
+    def test_finished_attempt_summaries_include_completed_and_timed_out(self) -> None:
+        test = self.service.get_test(self.service.list_tests()[0].id)
+        first_question = test.questions[0]
+        answer = self.service.evaluate_answer(
+            question=first_question,
+            question_position=1,
+            selected_choice_label=first_question.correct_choice_label,
+            elapsed_seconds=12.0,
+        )
+        completed = self.service.record_finished_attempt(
+            test_id=test.id,
+            status="completed",
+            elapsed_seconds=12.0,
+            total_questions=len(test.questions),
+            answers=(answer,),
+        )
+        timed_out = self.service.record_finished_attempt(
+            test_id=test.id,
+            status="timed_out",
+            elapsed_seconds=900.0,
+            total_questions=len(test.questions),
+            answers=(),
+        )
+
+        summaries = {
+            summary.attempt_id: summary
+            for summary in self.service.list_finished_attempts()
+        }
+
+        completed_summary = summaries[completed.attempt_id]
+        timed_out_summary = summaries[timed_out.attempt_id]
+        self.assertEqual(test.id, completed_summary.test_id)
+        self.assertEqual(test.title, completed_summary.test_title)
+        self.assertEqual("completed", completed_summary.status)
+        self.assertEqual(1, completed_summary.correct_count)
+        self.assertEqual(50, completed_summary.total_questions)
+        self.assertEqual(12.0, completed_summary.elapsed_seconds)
+        self.assertEqual("timed_out", timed_out_summary.status)
+        self.assertEqual(0, timed_out_summary.correct_count)
+        self.assertEqual(900.0, timed_out_summary.elapsed_seconds)
+
+    def test_aborted_status_is_not_recordable_as_finished_attempt(self) -> None:
+        test = self.service.get_test(self.service.list_tests()[0].id)
+
+        with self.assertRaises(ValueError):
+            self.service.record_finished_attempt(
+                test_id=test.id,
+                status="aborted",
+                elapsed_seconds=3.0,
+                total_questions=len(test.questions),
+                answers=(),
+            )
+
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            attempt_count = connection.execute(
+                "SELECT COUNT(*) FROM attempts"
+            ).fetchone()[0]
+
+        self.assertEqual(0, attempt_count)
 
     def test_image_seed_row_requires_image_filename_to_match_stimulus(self) -> None:
         row = {

@@ -13,11 +13,18 @@ scoring, and question loading to `QuizService`.
 from time import monotonic
 
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Button, Footer, Header, Label, ListItem, ListView, Switch
 
-from models import Question, QuizAttempt, QuizResult, TestDefinition, TestSummary
+from models import (
+    AttemptSummary,
+    Question,
+    QuizResult,
+    SubmittedAnswer,
+    TestDefinition,
+    TestSummary,
+)
 from services import QuizService
 from widgets import (
     ControlPanel,
@@ -49,7 +56,9 @@ class DashboardScreen(Screen):
                 initial_index=0 if self._tests else None,
                 id="exam-list",
             )
-            yield Button("Start Quiz", id="start-quiz", variant="success")
+            with Horizontal(id="dashboard-actions"):
+                yield Button("View Stats", id="view-stats", variant="primary")
+                yield Button("Start Quiz", id="start-quiz", variant="success")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -59,6 +68,8 @@ class DashboardScreen(Screen):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "start-quiz":
             self._start_selected_quiz()
+        elif event.button.id == "view-stats":
+            self.app.push_screen(StatsDashboardScreen(quiz_service=self._quiz_service))
 
     def _start_selected_quiz(self) -> None:
         if not self._tests:
@@ -78,6 +89,58 @@ class DashboardScreen(Screen):
     def _test_label(test: TestSummary) -> str:
         minutes = test.time_limit_seconds // 60
         return f"{test.title} - {test.question_count} questions / {minutes} min"
+
+
+class StatsDashboardScreen(Screen):
+    """Screen for viewing historical finished-attempt summaries."""
+
+    def __init__(self, *, quiz_service: QuizService) -> None:
+        super().__init__()
+        self._quiz_service = quiz_service
+        self._attempts: list[AttemptSummary] = (
+            self._quiz_service.list_finished_attempts()
+        )
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with Vertical(id="stats-body"):
+            yield Label("Attempt Results", id="stats-title")
+            yield ListView(
+                *self._attempt_items(),
+                initial_index=0 if self._attempts else None,
+                id="attempt-list",
+            )
+            yield Button("View Tests", id="view-tests", variant="primary")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.query_one("#attempt-list", ListView).border_title = "Finished Attempts"
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "view-tests":
+            self.app.pop_screen()
+
+    def _attempt_items(self) -> list[ListItem]:
+        if not self._attempts:
+            return [ListItem(Label("No finished attempts yet"), id="stats-empty")]
+
+        return [
+            ListItem(Label(self._attempt_label(attempt)))
+            for attempt in self._attempts
+        ]
+
+    @classmethod
+    def _attempt_label(cls, attempt: AttemptSummary) -> str:
+        return (
+            f"Test ID: {attempt.test_id} - {attempt.test_title} | "
+            f"Score: {attempt.correct_count} / {attempt.total_questions} | "
+            f"Time: {cls._format_seconds(attempt.elapsed_seconds)}"
+        )
+
+    @staticmethod
+    def _format_seconds(seconds: float) -> str:
+        minutes, seconds = divmod(int(seconds), 60)
+        return f"{minutes:02}:{seconds:02}"
 
 
 class QuizScreen(Screen):
@@ -109,8 +172,8 @@ class QuizScreen(Screen):
         super().__init__()
         self._quiz_service = quiz_service
         self.test = test
-        self._attempt: QuizAttempt | None = None
         self._result: QuizResult | None = None
+        self._submitted_answers: list[SubmittedAnswer] = []
         self._answered_questions = 0
         self._correct_answers = 0
         self._current_index = 0
@@ -145,19 +208,11 @@ class QuizScreen(Screen):
 
     def on_mount(self) -> None:
         """Start the quiz timer after the screen is mounted."""
-        self._attempt = self._quiz_service.start_attempt(
-            self.test.id,
-            self.total_questions,
-        )
         self._started_at = monotonic()
         self._render_timer()
         self._render_progress()
         self._sync_quiz_state()
         self.set_interval(0.25, self._tick)
-
-    def on_unmount(self) -> None:
-        """Do not leave interrupted attempts marked as in progress."""
-        self._abort_attempt_if_needed()
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle control-panel button presses."""
@@ -221,17 +276,17 @@ class QuizScreen(Screen):
             "#qa",
             QAPanel,
         ).selected_choice_label()
-        if selected_choice_label is None or self._attempt is None:
+        if selected_choice_label is None:
             self._sync_quiz_state()
             return
 
-        answer = self._quiz_service.submit_answer(
-            attempt_id=self._attempt.id,
+        answer = self._quiz_service.evaluate_answer(
             question=self._current_question(),
             question_position=self._current_index + 1,
             selected_choice_label=selected_choice_label,
             elapsed_seconds=self._elapsed_seconds(),
         )
+        self._submitted_answers.append(answer)
         self._answered_questions += 1
         if answer.is_correct:
             self._correct_answers += 1
@@ -281,15 +336,15 @@ class QuizScreen(Screen):
         self._started_at = None
         self._paused = False
         self._ended = True
-        if self._attempt is not None:
-            self._result = self._quiz_service.finish_attempt(
-                attempt_id=self._attempt.id,
-                status="timed_out" if ended_by_time else "completed",
-                elapsed_seconds=self._elapsed_before_pause,
-                total_questions=self.total_questions,
-            )
-            self._answered_questions = self._result.answered_count
-            self._correct_answers = self._result.correct_count
+        self._result = self._quiz_service.record_finished_attempt(
+            test_id=self.test.id,
+            status="timed_out" if ended_by_time else "completed",
+            elapsed_seconds=self._elapsed_before_pause,
+            total_questions=self.total_questions,
+            answers=tuple(self._submitted_answers),
+        )
+        self._answered_questions = self._result.answered_count
+        self._correct_answers = self._result.correct_count
         self._render_timer()
         self._render_progress()
         self.query_one("#summary-panel", SummaryPanel).update_summary(
@@ -318,18 +373,7 @@ class QuizScreen(Screen):
         )
 
     def _return_to_dashboard(self) -> None:
-        self._abort_attempt_if_needed()
         self.app.pop_screen()
-
-    def _abort_attempt_if_needed(self) -> None:
-        if self._ended or self._attempt is None:
-            return
-        self._quiz_service.abort_attempt(
-            attempt_id=self._attempt.id,
-            elapsed_seconds=self._elapsed_seconds(),
-            total_questions=self.total_questions,
-        )
-        self._attempt = None
 
     def _current_question(self) -> Question:
         return self.test.questions[self._current_index]

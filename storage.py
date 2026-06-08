@@ -6,16 +6,18 @@ import csv
 import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Iterable
 
 from models import (
+    AttemptSummary,
     AttemptAnswer,
     Choice,
     Question,
     QuizAttempt,
     QuizResult,
+    SubmittedAnswer,
     TestDefinition,
     TestSummary,
 )
@@ -29,6 +31,7 @@ VALID_STIMULUS_TYPES = frozenset({"text", "text_table", "image"})
 VALID_ATTEMPT_STATUSES = frozenset(
     {"in_progress", "completed", "timed_out", "aborted"}
 )
+FINAL_ATTEMPT_STATUSES = frozenset({"completed", "timed_out"})
 
 
 class SeedValidationError(ValueError):
@@ -306,6 +309,100 @@ class QuizStorage:
             time_limit_seconds=test_row["time_limit_seconds"],
             questions=questions,
         )
+
+    def list_finished_attempts(self) -> list[AttemptSummary]:
+        rows = self.connection.execute(
+            """
+            SELECT a.id AS attempt_id,
+                   a.test_id AS test_id,
+                   t.title AS test_title,
+                   a.status AS status,
+                   a.started_at AS started_at,
+                   a.finished_at AS finished_at,
+                   a.elapsed_seconds AS elapsed_seconds,
+                   a.answered_count AS answered_count,
+                   a.correct_count AS correct_count,
+                   a.total_questions AS total_questions
+            FROM attempts a
+            JOIN tests t ON t.id = a.test_id
+            WHERE a.status IN ('completed', 'timed_out')
+            ORDER BY a.finished_at DESC, a.id DESC
+            """
+        ).fetchall()
+        return [_attempt_summary_from_row(row) for row in rows]
+
+    def record_finished_attempt(
+        self,
+        *,
+        test_id: int,
+        status: str,
+        elapsed_seconds: float,
+        total_questions: int,
+        answers: tuple[SubmittedAnswer, ...],
+    ) -> QuizResult:
+        if status not in FINAL_ATTEMPT_STATUSES:
+            raise ValueError(f"Invalid finished attempt status {status!r}")
+
+        finished_at = _utc_now()
+        started_at = _derived_started_at(finished_at, elapsed_seconds)
+        answered_count = len(answers)
+        correct_count = sum(1 for answer in answers if answer.is_correct)
+
+        with self.connection:
+            cursor = self.connection.execute(
+                """
+                INSERT INTO attempts (
+                    test_id,
+                    status,
+                    started_at,
+                    finished_at,
+                    elapsed_seconds,
+                    answered_count,
+                    correct_count,
+                    total_questions
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    test_id,
+                    status,
+                    started_at,
+                    finished_at,
+                    elapsed_seconds,
+                    answered_count,
+                    correct_count,
+                    total_questions,
+                ),
+            )
+            attempt_id = cursor.lastrowid
+            self.connection.executemany(
+                """
+                INSERT INTO attempt_answers (
+                    attempt_id,
+                    question_id,
+                    question_position,
+                    selected_choice_label,
+                    selected_choice_text,
+                    is_correct,
+                    elapsed_seconds
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    (
+                        attempt_id,
+                        answer.question_id,
+                        answer.question_position,
+                        answer.selected_choice_label,
+                        answer.selected_choice_text,
+                        1 if answer.is_correct else 0,
+                        answer.elapsed_seconds,
+                    )
+                    for answer in answers
+                ),
+            )
+
+        return self.get_result(attempt_id)
 
     def create_attempt(self, test_id: int, total_questions: int) -> QuizAttempt:
         started_at = _utc_now()
@@ -672,6 +769,21 @@ def _test_summary_from_row(row: sqlite3.Row) -> TestSummary:
     )
 
 
+def _attempt_summary_from_row(row: sqlite3.Row) -> AttemptSummary:
+    return AttemptSummary(
+        attempt_id=row["attempt_id"],
+        test_id=row["test_id"],
+        test_title=row["test_title"],
+        status=row["status"],
+        started_at=row["started_at"],
+        finished_at=row["finished_at"],
+        elapsed_seconds=row["elapsed_seconds"],
+        answered_count=row["answered_count"],
+        correct_count=row["correct_count"],
+        total_questions=row["total_questions"],
+    )
+
+
 def _question_from_row(row: sqlite3.Row, choices: tuple[Choice, ...]) -> Question:
     return Question(
         id=row["id"],
@@ -722,3 +834,9 @@ def _answer_from_row(row: sqlite3.Row) -> AttemptAnswer:
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _derived_started_at(finished_at: str, elapsed_seconds: float) -> str:
+    finished = datetime.fromisoformat(finished_at)
+    started = finished - timedelta(seconds=elapsed_seconds)
+    return started.isoformat(timespec="seconds")

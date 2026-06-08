@@ -84,6 +84,18 @@ class TestDefinition:
 
 
 @dataclass(frozen=True)
+class SubmittedAnswer:
+    """A submitted answer held in memory until an attempt is finished."""
+
+    question_id: int
+    question_position: int
+    selected_choice_label: str
+    selected_choice_text: str
+    is_correct: bool
+    elapsed_seconds: float
+
+
+@dataclass(frozen=True)
 class QuizAttempt:
     """Persisted quiz attempt metadata."""
 
@@ -129,3 +141,19 @@ class QuizResult:
         if self.answered_count == 0:
             return 0.0
         return (self.correct_count / self.answered_count) * 100
+
+
+@dataclass(frozen=True)
+class AttemptSummary:
+    """List-row summary for a finished quiz attempt."""
+
+    attempt_id: int
+    test_id: int
+    test_title: str
+    status: str
+    started_at: str
+    finished_at: str | None
+    elapsed_seconds: float
+    answered_count: int
+    correct_count: int
+    total_questions: int

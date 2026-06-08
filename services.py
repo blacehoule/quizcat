@@ -10,11 +10,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from models import (
-    AttemptAnswer,
+    AttemptSummary,
     Question,
     QuestionContent,
-    QuizAttempt,
     QuizResult,
+    SubmittedAnswer,
     TestDefinition,
     TestSummary,
 )
@@ -49,18 +49,17 @@ class QuizService:
     def get_test(self, test_id: int) -> TestDefinition:
         return self._storage.get_test(test_id)
 
-    def start_attempt(self, test_id: int, total_questions: int) -> QuizAttempt:
-        return self._storage.create_attempt(test_id, total_questions)
+    def list_finished_attempts(self) -> list[AttemptSummary]:
+        return self._storage.list_finished_attempts()
 
-    def submit_answer(
+    def evaluate_answer(
         self,
         *,
-        attempt_id: int,
         question: Question,
         question_position: int,
         selected_choice_label: str,
         elapsed_seconds: float,
-    ) -> AttemptAnswer:
+    ) -> SubmittedAnswer:
         choice = question.choice_for_label(selected_choice_label)
         if choice is None:
             raise ValueError(
@@ -69,8 +68,7 @@ class QuizService:
 
         normalized_label = choice.label.upper()
         is_correct = normalized_label == question.correct_choice_label.upper()
-        return self._storage.record_answer(
-            attempt_id=attempt_id,
+        return SubmittedAnswer(
             question_id=question.id,
             question_position=question_position,
             selected_choice_label=normalized_label,
@@ -79,33 +77,21 @@ class QuizService:
             elapsed_seconds=elapsed_seconds,
         )
 
-    def finish_attempt(
+    def record_finished_attempt(
         self,
         *,
-        attempt_id: int,
+        test_id: int,
         status: str,
         elapsed_seconds: float,
         total_questions: int,
+        answers: tuple[SubmittedAnswer, ...],
     ) -> QuizResult:
-        return self._storage.finish_attempt(
-            attempt_id=attempt_id,
+        return self._storage.record_finished_attempt(
+            test_id=test_id,
             status=status,
             elapsed_seconds=elapsed_seconds,
             total_questions=total_questions,
-        )
-
-    def abort_attempt(
-        self,
-        *,
-        attempt_id: int,
-        elapsed_seconds: float,
-        total_questions: int,
-    ) -> QuizResult:
-        return self.finish_attempt(
-            attempt_id=attempt_id,
-            status="aborted",
-            elapsed_seconds=elapsed_seconds,
-            total_questions=total_questions,
+            answers=answers,
         )
 
     def question_markdown(self, question: Question) -> str:
