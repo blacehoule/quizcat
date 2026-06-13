@@ -3,6 +3,9 @@
 A Next.js rewrite of the QuizCat terminal app, backed by Postgres (Vercel
 Postgres / Neon). Single-user, no auth.
 
+Live Railway deployment:
+https://quizcat-web-production.up.railway.app
+
 ## 1. Set up Postgres
 
 1. In your Vercel project, go to **Storage → Create Database → Postgres**
@@ -59,7 +62,24 @@ Open http://localhost:3000.
 Question images live in `public/images/`, copied from the Python app's
 `images/` directory. They're served directly at `/images/<filename>`.
 
-## 7. Deploy to Vercel
+## 7. Deploy to Railway
+
+The included `railway.toml` builds and starts the Next.js production server.
+Deploy `web/` as the service root and provide `POSTGRES_URL`:
+
+```powershell
+railway add --service quizcat-web --json
+railway variable set 'POSTGRES_URL=${{Postgres.DATABASE_URL}}' --service quizcat-web
+railway up web --path-as-root --service quizcat-web --detach
+railway domain --service quizcat-web
+```
+
+The Postgres schema and seed data must be applied once before the first
+deployment, as described in steps 3 and 4.
+
+Current production data contains 400 questions across 8 sample exams.
+
+## 8. Deploy to Vercel
 
 1. Push this repo to GitHub (or your git provider of choice).
 2. Import the project in Vercel, set the **root directory** to `web/` if

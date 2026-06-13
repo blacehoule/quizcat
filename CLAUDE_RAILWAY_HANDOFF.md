@@ -112,31 +112,23 @@ railway up
 railway domain
 ```
 
-## Current Git State
+## Next.js Web Service
 
-The deployment-related changes are currently uncommitted:
+The full Next.js/Postgres application under `web/` is deployed separately from
+the Textual service. Its scoped `web/railway.toml` starts `npm run start`, and
+the service reads `POSTGRES_URL` from the Railway Postgres resource.
 
-```text
- M README.md
- M serve.py
-?? railway.toml
-?? CLAUDE_RAILWAY_HANDOFF.md
-```
-
-Review and commit these files when ready.
-
-Suggested commit message:
-
-```text
-Deploy Textual browser server to Railway
-```
+- Railway service: `quizcat-web`
+- Public URL: https://quizcat-web-production.up.railway.app
+- Deployment result: `SUCCESS`
+- Seeded data: 400 questions, 1,952 choices, 8 tests, 400 test-question links
+- Verified routes: `/`, `/api/tests`, `/quiz/1`, `/stats`
 
 ## Notes
 
 - `textual-serve` is already included in `pyproject.toml` and `uv.lock`.
 - This Railway deployment serves the original Textual application.
-- The separate Next.js application under `web/` is unrelated to this Railway
-  service.
+- The separate Next.js application under `web/` uses its own Railway service.
 - A Railway CLI upload created the current deployment. Future deployments can
   use `railway up`, or the service can later be connected to a GitHub branch for
   automatic deployments.

@@ -1,5 +1,10 @@
 # QuizCat Terminal User Interface
 
+## Live applications
+
+- Full Next.js web app: https://quizcat-web-production.up.railway.app
+- Textual browser app: https://quizcat-textual-production.up.railway.app
+
 ## Serve in a browser
 
 Install dependencies and start the Textual web server:
@@ -26,6 +31,14 @@ railway domain
 `railway domain` generates the public Railway URL after the deployment is
 healthy.
 
+## Full Next.js web application
+
+The production-style web application lives in `web/`. It uses the shared
+question bank and a Postgres database, and can be deployed as a separate
+Railway service without replacing the Textual browser service.
+
+See `web/README.md` for local setup, database migration and seeding, and
+deployment instructions.
 
 ## CCAT Question Bank Dataset Context
 
