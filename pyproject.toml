@@ -7,4 +7,5 @@ requires-python = ">=3.14"
 dependencies = [
     "textual>=8.2.7",
     "textual-image>=0.13.2",
+    "textual-serve>=1.1.3",
 ]
