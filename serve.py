@@ -2,14 +2,36 @@
 
 Run with::
 
-    uv run python serve.py
+    python serve.py
 
-Then open the printed URL (default http://localhost:8000) in a browser.
+Locally, open http://localhost:8000. On Railway, the server binds to the
+platform-provided PORT on all network interfaces.
 """
+
+import os
+import sys
 
 from textual_serve.server import Server
 
-server = Server("uv run python main.py")
+host = os.environ.get("HOST", "0.0.0.0")
+port = int(os.environ.get("PORT", "8000"))
+railway_domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN")
+public_url = os.environ.get("PUBLIC_URL")
+
+if public_url is None:
+    public_url = (
+        f"https://{railway_domain}"
+        if railway_domain
+        else f"http://localhost:{port}"
+    )
+
+server = Server(
+    f'"{sys.executable}" main.py',
+    host=host,
+    port=port,
+    title="QuizCat",
+    public_url=public_url,
+)
 
 if __name__ == "__main__":
     server.serve()

@@ -1,5 +1,31 @@
 # QuizCat Terminal User Interface
 
+## Serve in a browser
+
+Install dependencies and start the Textual web server:
+
+```bash
+uv sync
+uv run python serve.py
+```
+
+Open `http://localhost:8000`.
+
+### Deploy to Railway
+
+The included `railway.toml` starts `python serve.py`. The server listens on
+Railway's injected `PORT` environment variable and binds to `0.0.0.0`.
+
+```bash
+railway login
+railway up
+railway domain
+```
+
+`railway up` creates or selects a project and deploys the current directory.
+`railway domain` generates the public Railway URL after the deployment is
+healthy.
+
 
 ## CCAT Question Bank Dataset Context
 
