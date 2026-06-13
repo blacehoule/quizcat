@@ -10,4 +10,5 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "textual>=8.2.7",
     "textual-image>=0.13.2",
+    "textual-serve>=1.1.3",
 ]
