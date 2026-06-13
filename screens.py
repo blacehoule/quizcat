@@ -12,11 +12,22 @@ scoring, and question loading to `QuizService`.
 
 from time import monotonic
 
+from textual import work
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
-from textual.widgets import Button, Footer, Header, Label, ListItem, ListView, Switch
+from textual.widgets import (
+    Button,
+    Footer,
+    Header,
+    Label,
+    ListItem,
+    ListView,
+    Switch,
+)
+from textual.worker import Worker, WorkerState
 
+from harness import create_chat_client
 from models import (
     AttemptSummary,
     Question,
@@ -25,7 +36,7 @@ from models import (
     TestDefinition,
     TestSummary,
 )
-from services import QuizService
+from services import GeneratedTestResult, QuizService, create_quiz_service
 from widgets import (
     ControlPanel,
     PausedPanel,
@@ -39,25 +50,27 @@ from widgets import (
 class DashboardScreen(Screen):
     """Start screen for choosing which sample exam to practice."""
 
+    GENERATION_GROUP = "generate-test"
+
     def __init__(self, *, quiz_service: QuizService) -> None:
         super().__init__()
         self._quiz_service = quiz_service
         self._tests: list[TestSummary] = self._quiz_service.list_tests()
+        self._generating = False
 
     def compose(self) -> ComposeResult:
         yield Header()
         with Vertical(id="dashboard-body"):
             yield Label("Choose a Practice Test", id="dashboard-title")
             yield ListView(
-                *[
-                    ListItem(Label(self._test_label(test)), id=f"test-{test.id}")
-                    for test in self._tests
-                ],
+                *self._exam_items(),
                 initial_index=0 if self._tests else None,
                 id="exam-list",
             )
+            yield Label("", id="dashboard-status")
             with Horizontal(id="dashboard-actions"):
                 yield Button("View Stats", id="view-stats", variant="primary")
+                yield Button("Generate Test", id="generate-test", variant="warning")
                 yield Button("Start Quiz", id="start-quiz", variant="success")
         yield Footer()
 
@@ -70,6 +83,8 @@ class DashboardScreen(Screen):
             self._start_selected_quiz()
         elif event.button.id == "view-stats":
             self.app.push_screen(StatsDashboardScreen(quiz_service=self._quiz_service))
+        elif event.button.id == "generate-test":
+            self._start_generation()
 
     def _start_selected_quiz(self) -> None:
         if not self._tests:
@@ -77,13 +92,115 @@ class DashboardScreen(Screen):
 
         exam_list = self.query_one("#exam-list", ListView)
         selected_index = exam_list.index or 0
-        selected_test = self._tests[selected_index]
+        self._start_quiz_for_test(self._tests[selected_index].id)
+
+    def _start_quiz_for_test(self, test_id: int) -> None:
         self.app.push_screen(
             QuizScreen(
                 quiz_service=self._quiz_service,
-                test=self._quiz_service.get_test(selected_test.id),
+                test=self._quiz_service.get_test(test_id),
             )
         )
+
+    def _start_generation(self) -> None:
+        """Kick off background test generation, guarding against re-entry."""
+        if self._generating:
+            return
+        self._generating = True
+        self.query_one("#generate-test", Button).disabled = True
+        self._set_status("Generating a new test… this can take up to a minute.")
+        self._generate_test_worker()
+
+    @work(thread=True, exclusive=True, group=GENERATION_GROUP)
+    def _generate_test_worker(self) -> GeneratedTestResult:
+        """Run the (blocking) harness off the UI thread.
+
+        SQLite connections are single-thread, so the worker opens its own
+        connection to the same database file rather than sharing the UI
+        thread's. Once it commits, the UI thread's connection sees the new
+        rows. Returning a value or raising drives
+        ``on_worker_state_changed``; the progress callback marshals live
+        status back onto the UI thread.
+        """
+        client = create_chat_client()
+
+        def on_question(event) -> None:
+            self.app.call_from_thread(
+                self._set_status,
+                f"Generating… {event.position}/{event.requested_count} "
+                f"({event.accepted_count} accepted so far)",
+            )
+
+        worker_service = create_quiz_service(
+            db_path=self._quiz_service.db_path,
+            seed_csv_path=None,
+            image_asset_dir=self._quiz_service.image_asset_dir,
+        )
+        try:
+            return worker_service.generate_test(client=client, on_question=on_question)
+        finally:
+            worker_service.close()
+
+    async def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
+        """Finish the generation flow once the worker settles."""
+        if event.worker.group != self.GENERATION_GROUP:
+            return
+        if event.state not in (WorkerState.SUCCESS, WorkerState.ERROR):
+            return
+
+        self._generating = False
+        self.query_one("#generate-test", Button).disabled = False
+
+        if event.state == WorkerState.ERROR:
+            self._set_status("")
+            self.app.notify(
+                f"Test generation failed: {event.worker.error}", severity="error"
+            )
+            return
+
+        result: GeneratedTestResult = event.worker.result
+        if result.succeeded:
+            await self._reload_tests(select_test_id=result.test_id)
+            new_test = next(
+                (test for test in self._tests if test.id == result.test_id), None
+            )
+            title = new_test.title if new_test else "New test"
+            self._set_status(f"Added {title} ({result.summary.accepted_count} questions).")
+            self.app.notify(f"{title} is ready to play.")
+        else:
+            self._set_status("Generation produced no valid questions.")
+            self.app.notify(
+                "Generation failed: no questions passed the guardrails.",
+                severity="error",
+            )
+
+    def _set_status(self, message: str) -> None:
+        self.query_one("#dashboard-status", Label).update(message)
+
+    async def _reload_tests(self, *, select_test_id: int | None = None) -> None:
+        self._tests = self._quiz_service.list_tests()
+        exam_list = self.query_one("#exam-list", ListView)
+        await exam_list.clear()
+        await exam_list.extend(self._exam_items())
+        if self._tests:
+            index = 0
+            if select_test_id is not None:
+                index = next(
+                    (
+                        position
+                        for position, test in enumerate(self._tests)
+                        if test.id == select_test_id
+                    ),
+                    0,
+                )
+            exam_list.index = index
+        self.query_one("#start-quiz", Button).disabled = not self._tests
+
+    def _exam_items(self) -> list[ListItem]:
+        return [
+            ListItem(Label(self._test_label(test)), id=f"test-{test.id}")
+            for test in self._tests
+        ]
 
     @staticmethod
     def _test_label(test: TestSummary) -> str:

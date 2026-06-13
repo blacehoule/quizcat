@@ -7,8 +7,18 @@ in-process backend boundary.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
+from harness import (
+    ChatClient,
+    GenerationRequest,
+    HarnessQuestionTrace,
+    HarnessRunSummary,
+    ProgressCallback,
+    create_chat_client,
+    run_generation,
+)
 from models import (
     AttemptSummary,
     Question,
@@ -28,6 +38,22 @@ from storage import (
 )
 
 
+GENERATED_SECONDS_PER_QUESTION = 60
+
+
+@dataclass(frozen=True)
+class GeneratedTestResult:
+    """Outcome of a generate-test request, for the UI to react to."""
+
+    test_id: int | None
+    run_id: int
+    summary: HarnessRunSummary
+
+    @property
+    def succeeded(self) -> bool:
+        return self.test_id is not None
+
+
 class QuizService:
     """In-process application service used by the TUI."""
 
@@ -36,9 +62,14 @@ class QuizService:
         storage: QuizStorage,
         *,
         image_asset_dir: Path | None = None,
+        db_path: Path | str | None = None,
     ) -> None:
         self._storage = storage
         self.image_asset_dir = image_asset_dir
+        # SQLite connections are single-thread; the db path lets a background
+        # worker open its own connection to the same file (see ``generate_test``
+        # callers in the TUI). ``None`` for in-memory/test services.
+        self.db_path = db_path
 
     def close(self) -> None:
         self._storage.close()
@@ -94,6 +125,47 @@ class QuizService:
             answers=answers,
         )
 
+    def generate_test(
+        self,
+        *,
+        request: GenerationRequest | None = None,
+        client: ChatClient | None = None,
+        on_question: ProgressCallback | None = None,
+    ) -> GeneratedTestResult:
+        """Generate a mixed exam via the harness and persist it atomically.
+
+        On success a playable ``generated`` test is created and its run trace
+        stored; on failure no test is created but the run trace is still
+        recorded so the failure remains observable.
+        """
+        request = request or GenerationRequest()
+        if client is None:
+            client = create_chat_client()
+
+        summary = run_generation(client, self._storage, request, on_question=on_question)
+        run = _run_to_dict(summary)
+
+        if not summary.accepted:
+            run_id = self._storage.record_harness_run(run)
+            return GeneratedTestResult(test_id=None, run_id=run_id, summary=summary)
+
+        title = self._next_generated_title()
+        time_limit = max(
+            GENERATED_SECONDS_PER_QUESTION,
+            len(summary.accepted) * GENERATED_SECONDS_PER_QUESTION,
+        )
+        test_id, run_id = self._storage.create_generated_test(
+            title=title,
+            time_limit_seconds=time_limit,
+            drafts=summary.accepted,
+            run=run,
+        )
+        return GeneratedTestResult(test_id=test_id, run_id=run_id, summary=summary)
+
+    def _next_generated_title(self) -> str:
+        generated = sum(1 for test in self.list_tests() if test.kind == "generated")
+        return f"Generated Exam {generated + 1}"
+
     def question_markdown(self, question: Question) -> str:
         return format_question_markdown(
             question,
@@ -120,7 +192,40 @@ def create_quiz_service(
         seed_from_csv(connection, seed_csv_path)
 
     image_dir = Path(image_asset_dir) if image_asset_dir is not None else None
-    return QuizService(QuizStorage(connection), image_asset_dir=image_dir)
+    stored_db_path = None if str(db_path) == ":memory:" else db_path
+    return QuizService(
+        QuizStorage(connection), image_asset_dir=image_dir, db_path=stored_db_path
+    )
+
+
+def _run_to_dict(summary: HarnessRunSummary) -> dict:
+    """Flatten a run summary into the primitive shape storage persists."""
+    return {
+        "status": summary.status,
+        "requested_count": summary.request.requested_count,
+        "accepted_count": summary.accepted_count,
+        "examples_per_type": summary.request.examples_per_type,
+        "max_attempts": summary.request.max_attempts,
+        "error": summary.error,
+        "attempts": [_trace_to_dict(trace) for trace in summary.traces],
+    }
+
+
+def _trace_to_dict(trace: HarnessQuestionTrace) -> dict:
+    return {
+        "requested_type": trace.requested_type,
+        "resolved_type": trace.resolved_type,
+        "attempt_number": trace.attempt_number,
+        "used_tool_path": trace.used_tool_path,
+        "accepted": trace.accepted,
+        "json_repair_attempts": trace.json_repair_attempts,
+        "verdict": trace.verification.verdict,
+        "verifier_notes": trace.verification.notes,
+        "guardrail_errors": list(trace.guardrail_errors),
+        "tool_calls": [call.as_dict() for call in trace.tool_calls],
+        "raw_output": trace.raw_model_output,
+        "final_output": trace.final_output,
+    }
 
 
 def format_question_markdown(

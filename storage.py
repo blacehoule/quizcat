@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import csv
+import json
 import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Sequence
 
 from models import (
     AttemptSummary,
@@ -153,14 +154,46 @@ def create_schema(connection: sqlite3.Connection) -> None:
             UNIQUE (attempt_id, question_position)
         );
 
+        CREATE TABLE IF NOT EXISTS harness_runs (
+            id INTEGER PRIMARY KEY,
+            test_id INTEGER REFERENCES tests(id) ON DELETE SET NULL,
+            status TEXT NOT NULL,
+            requested_count INTEGER NOT NULL,
+            accepted_count INTEGER NOT NULL,
+            examples_per_type INTEGER NOT NULL,
+            max_attempts INTEGER NOT NULL,
+            error TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS harness_question_attempts (
+            id INTEGER PRIMARY KEY,
+            run_id INTEGER NOT NULL
+                REFERENCES harness_runs(id) ON DELETE CASCADE,
+            requested_type TEXT NOT NULL,
+            resolved_type TEXT NOT NULL,
+            attempt_number INTEGER NOT NULL,
+            used_tool_path INTEGER NOT NULL CHECK (used_tool_path IN (0, 1)),
+            accepted INTEGER NOT NULL CHECK (accepted IN (0, 1)),
+            json_repair_attempts INTEGER NOT NULL DEFAULT 0,
+            verdict TEXT NOT NULL DEFAULT '',
+            verifier_notes TEXT NOT NULL DEFAULT '',
+            guardrail_errors TEXT NOT NULL DEFAULT '[]',
+            tool_calls TEXT NOT NULL DEFAULT '[]',
+            raw_output TEXT NOT NULL DEFAULT '',
+            final_output TEXT NOT NULL DEFAULT ''
+        );
+
         CREATE INDEX IF NOT EXISTS idx_choices_question_position
             ON choices(question_id, position);
         CREATE INDEX IF NOT EXISTS idx_test_questions_position
             ON test_questions(test_id, position);
         CREATE INDEX IF NOT EXISTS idx_attempt_answers_attempt
             ON attempt_answers(attempt_id, question_position);
+        CREATE INDEX IF NOT EXISTS idx_harness_attempts_run
+            ON harness_question_attempts(run_id, attempt_number);
 
-        PRAGMA user_version = 1;
+        PRAGMA user_version = 2;
         """
     )
     connection.commit()
@@ -309,6 +342,176 @@ class QuizStorage:
             time_limit_seconds=test_row["time_limit_seconds"],
             questions=questions,
         )
+
+    def available_question_types(self) -> list[str]:
+        """Distinct question types present in the store, sorted."""
+        rows = self.connection.execute(
+            "SELECT DISTINCT question_type FROM questions ORDER BY question_type"
+        ).fetchall()
+        return [row["question_type"] for row in rows]
+
+    def examples_for_type(self, question_type: str, limit: int) -> list[Question]:
+        """Return up to ``limit`` stored questions of a type, with choices."""
+        question_rows = self.connection.execute(
+            """
+            SELECT q.*
+            FROM questions q
+            WHERE q.question_type = ?
+            ORDER BY q.id
+            LIMIT ?
+            """,
+            (question_type, limit),
+        ).fetchall()
+        choices_by_question = self._choices_by_question_id(
+            row["id"] for row in question_rows
+        )
+        return [
+            _question_from_row(row, choices_by_question[row["id"]])
+            for row in question_rows
+        ]
+
+    def existing_stimuli_for_type(self, question_type: str) -> set[str]:
+        """Stimuli already stored for a type, for duplicate detection."""
+        rows = self.connection.execute(
+            "SELECT stimulus FROM questions WHERE question_type = ?",
+            (question_type,),
+        ).fetchall()
+        return {row["stimulus"] for row in rows}
+
+    def create_generated_test(
+        self,
+        *,
+        title: str,
+        time_limit_seconds: int,
+        drafts: Sequence[object],
+        run: dict,
+    ) -> tuple[int, int]:
+        """Persist generated questions, a test, and the run trace atomically.
+
+        ``drafts`` are duck-typed generated-question objects (see
+        ``harness.GeneratedQuestionDraft``); ``run`` carries the run-level
+        metadata plus an ``attempts`` list of trace dicts. Returns
+        ``(test_id, run_id)``.
+        """
+        with self.connection:
+            question_ids: list[int] = []
+            for draft in drafts:
+                cursor = self.connection.execute(
+                    """
+                    INSERT INTO questions (
+                        external_id, origin, source_exam, source_file,
+                        source_category, source_question_number, category,
+                        question_type, prompt, stimulus, stimulus_type,
+                        correct_choice_label, correct_choice_text, explanation
+                    )
+                    VALUES (NULL, 'generated', NULL, NULL, NULL, NULL,
+                            ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        draft.category,
+                        draft.question_type,
+                        draft.prompt,
+                        draft.stimulus,
+                        draft.stimulus_type,
+                        draft.correct_choice_label,
+                        draft.correct_choice_text,
+                        draft.explanation,
+                    ),
+                )
+                question_id = int(cursor.lastrowid)
+                self.connection.executemany(
+                    """
+                    INSERT INTO choices (question_id, label, position, text)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        (question_id, choice.label, choice.position, choice.text)
+                        for choice in draft.choices
+                    ),
+                )
+                question_ids.append(question_id)
+
+            test_cursor = self.connection.execute(
+                """
+                INSERT INTO tests (
+                    title, kind, source_exam, question_count, time_limit_seconds
+                )
+                VALUES (?, 'generated', NULL, ?, ?)
+                """,
+                (title, len(question_ids), time_limit_seconds),
+            )
+            test_id = int(test_cursor.lastrowid)
+            self.connection.executemany(
+                """
+                INSERT INTO test_questions (test_id, question_id, position)
+                VALUES (?, ?, ?)
+                """,
+                (
+                    (test_id, question_id, position)
+                    for position, question_id in enumerate(question_ids, start=1)
+                ),
+            )
+
+            run_id = self._insert_harness_run(test_id, run)
+
+        return test_id, run_id
+
+    def record_harness_run(self, run: dict, *, test_id: int | None = None) -> int:
+        """Persist a run trace not tied to a created test (e.g. a failed run)."""
+        with self.connection:
+            return self._insert_harness_run(test_id, run)
+
+    def _insert_harness_run(self, test_id: int | None, run: dict) -> int:
+        cursor = self.connection.execute(
+            """
+            INSERT INTO harness_runs (
+                test_id, status, requested_count, accepted_count,
+                examples_per_type, max_attempts, error, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                test_id,
+                run["status"],
+                run["requested_count"],
+                run["accepted_count"],
+                run["examples_per_type"],
+                run["max_attempts"],
+                run.get("error", ""),
+                _utc_now(),
+            ),
+        )
+        run_id = int(cursor.lastrowid)
+        self.connection.executemany(
+            """
+            INSERT INTO harness_question_attempts (
+                run_id, requested_type, resolved_type, attempt_number,
+                used_tool_path, accepted, json_repair_attempts, verdict,
+                verifier_notes, guardrail_errors, tool_calls, raw_output,
+                final_output
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                (
+                    run_id,
+                    attempt["requested_type"],
+                    attempt["resolved_type"],
+                    attempt["attempt_number"],
+                    1 if attempt["used_tool_path"] else 0,
+                    1 if attempt["accepted"] else 0,
+                    attempt["json_repair_attempts"],
+                    attempt["verdict"],
+                    attempt["verifier_notes"],
+                    json.dumps(attempt["guardrail_errors"]),
+                    json.dumps(attempt["tool_calls"]),
+                    attempt["raw_output"],
+                    attempt["final_output"],
+                )
+                for attempt in run.get("attempts", [])
+            ),
+        )
+        return run_id
 
     def list_finished_attempts(self) -> list[AttemptSummary]:
         rows = self.connection.execute(

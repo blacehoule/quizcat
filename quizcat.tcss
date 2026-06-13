@@ -37,6 +37,14 @@
     padding: 1 2;
 }
 
+#dashboard-status {
+    height: 1;
+    width: 1fr;
+    color: $text-muted;
+    content-align: left middle;
+    margin-top: 1;
+}
+
 #dashboard-title {
     height: 3;
     width: 1fr;

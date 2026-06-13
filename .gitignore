@@ -11,3 +11,6 @@ wheels/
 
 # Local application state
 var/
+
+# Secrets (OpenAI API key for the generation harness)
+.env
